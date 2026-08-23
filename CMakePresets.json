@@ -1,0 +1,44 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "debug",
+      "displayName": "Debug (Unix Makefiles, arm64)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build",
+      "environment": {
+        "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "11.0"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "standalone",
+      "configurePreset": "debug",
+      "configuration": "Debug",
+      "targets": ["PianoLED_Standalone"]
+    },
+    {
+      "name": "vst3",
+      "configurePreset": "debug",
+      "configuration": "Debug",
+      "targets": ["PianoLED_VST3"]
+    },
+    {
+      "name": "au",
+      "configurePreset": "debug",
+      "configuration": "Debug",
+      "targets": ["PianoLED_AU"]
+    }
+  ]
+}
