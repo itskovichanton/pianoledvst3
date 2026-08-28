@@ -22,7 +22,6 @@ void PianoLEDAudioProcessor::prepareToPlay (double, int)
 
 void PianoLEDAudioProcessor::releaseResources()
 {
-    ledBridge.panic();
 }
 
 void PianoLEDAudioProcessor::reset()
@@ -54,24 +53,10 @@ void PianoLEDAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 {
     juce::ScopedNoDenormals noDenormals;
 
+    /* Инструмент не издаёт звука — тишина, чтобы не шипело в микшере.
+     * MIDI всё равно приходит: GarageBand отдаёт ноты зелёному слоту. */
     for (auto channel = 0; channel < buffer.getNumChannels(); ++channel)
         buffer.clear (channel, 0, buffer.getNumSamples());
-
-    for (const auto metadata : midiMessages)
-    {
-        const auto message = metadata.getMessage();
-
-        if (message.isNoteOn())
-        {
-            lastMidiNote.store (message.getNoteNumber(), std::memory_order_relaxed);
-            lastMidiVelocity.store (message.getVelocity(), std::memory_order_relaxed);
-        }
-        else if (message.isNoteOff()
-                 && message.getNoteNumber() == lastMidiNote.load (std::memory_order_relaxed))
-        {
-            lastMidiVelocity.store (0, std::memory_order_relaxed);
-        }
-    }
 
     ledBridge.processMidi (midiMessages);
 }

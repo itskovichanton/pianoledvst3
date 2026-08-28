@@ -14,6 +14,8 @@ public:
 
 private:
     void timerCallback() override;
+    void drawStrip (juce::Graphics&);
+    void drawKeyboard (juce::Graphics&);
 
     PianoLEDAudioProcessor& processorRef;
     juce::Label titleLabel;
@@ -21,6 +23,9 @@ private:
     juce::Label connectionLabel;
     juce::TextButton reconnectButton;
     juce::Label hintLabel;
+
+    juce::Rectangle<int> stripBounds;
+    juce::Rectangle<int> keyboardBounds;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PianoLEDAudioProcessorEditor)
 };

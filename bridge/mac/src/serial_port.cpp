@@ -271,4 +271,23 @@ bool SerialPort::launchHelper(const std::string& executablePath, std::string* er
     return true;
 }
 
+bool SerialPort::isLocalPortListening(const std::string& host, int port) {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return false;
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<std::uint16_t>(port));
+    if (::inet_pton(AF_INET, host.c_str(), &addr.sin_addr) != 1) {
+        ::close(fd);
+        return false;
+    }
+
+    /* Без SO_REUSEADDR: если helper уже слушает, bind вернёт EADDRINUSE. */
+    const int rc = ::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
+    const int saved = errno;
+    ::close(fd);
+    return rc != 0 && saved == EADDRINUSE;
+}
+
 }  // namespace piano_led

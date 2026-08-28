@@ -29,6 +29,15 @@ extern "C" {
 #define LED_GUARD_CHANNEL_UA 20000u
 
 /**
+ * Жёсткий потолок канала: 1% от 255.
+ *
+ * Бюджет тока режет кадр пропорционально, и при «случайных» 255 на всей ленте
+ * она всё равно заберёт все 150 мА. Обрезка канала не даёт хосту зажечь
+ * пиксель ярче 1%, что бы ни пришло по USB.
+ */
+#define LED_GUARD_MAX_CHANNEL 3u
+
+/**
  * Оценка тока кадра в микроамперах.
  *
  * @param pixels     буфер R,G,B по светодиоду
@@ -47,6 +56,9 @@ uint32_t led_guard_estimate_ua(const uint8_t* pixels, size_t byte_count);
  * @return 1, если кадр пришлось притушить, иначе 0
  */
 int led_guard_apply(uint8_t* pixels, size_t byte_count, uint32_t budget_ma);
+
+/** Обрезает каждый канал сверху. Кадр правится на месте. */
+void led_guard_clamp_channels(uint8_t* pixels, size_t byte_count, uint8_t max_channel);
 
 #ifdef __cplusplus
 }

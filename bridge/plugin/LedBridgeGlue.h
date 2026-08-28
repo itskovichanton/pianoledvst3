@@ -85,6 +85,17 @@ public:
      * Realtime-безопасно: только атомарные операции, ни одной аллокации.
      */
     void processMidi(const juce::MidiBuffer& midi) noexcept {
+        /* GarageBand/Logic часто кладут All Notes Off в конец блока. Если
+         * после нот аккорда сразу идёт CC 123, маска обнуляется и в UI
+         * остаётся одна нота. Панику принимаем только если она не позже
+         * последнего note-on/off в этом же буфере. */
+        int lastNoteSample = -1;
+        for (const auto metadata : midi) {
+            const juce::MidiMessage message = metadata.getMessage();
+            if (message.isNoteOn() || message.isNoteOff())
+                lastNoteSample = metadata.samplePosition;
+        }
+
         for (const auto metadata : midi) {
             const juce::MidiMessage message = metadata.getMessage();
 
@@ -96,7 +107,8 @@ public:
             } else if (message.isNoteOff()) {
                 bridge_.noteOff(message.getNoteNumber());
             } else if (message.isAllNotesOff() || message.isAllSoundOff()) {
-                bridge_.allNotesOff();
+                if (lastNoteSample < 0 || metadata.samplePosition <= lastNoteSample)
+                    bridge_.allNotesOff();
             }
         }
     }
@@ -114,8 +126,8 @@ public:
      *         не повод мешать человеку сводить трек.
      */
     bool start() {
-        launchHelperIfNeeded();
-        juce::Thread::sleep(700);
+        const bool launched = launchHelperIfNeeded();
+        if (launched) juce::Thread::sleep(700);
         std::string error;
         const bool connected = bridge_.openAuto(&error, 3000);
         if (!connected) lastError_ = error;
@@ -135,9 +147,10 @@ public:
 
     /** Повторная попытка подключения — например по кнопке в редакторе. */
     bool reconnect() {
-        if (bridge_.isOpen()) bridge_.close();
-        launchHelperIfNeeded();
-        juce::Thread::sleep(700);
+        if (bridge_.isOpen()) return true;
+
+        const bool launched = launchHelperIfNeeded();
+        if (launched) juce::Thread::sleep(700);
         std::string error;
         const bool connected = bridge_.openAuto(&error, 3000);
         if (!connected) lastError_ = error;
@@ -147,6 +160,9 @@ public:
     bool isConnected() const { return bridge_.isOpen(); }
     juce::String devicePath() const { return juce::String(bridge_.devicePath()); }
     juce::String lastError() const { return juce::String(lastError_); }
+
+    /** Все сейчас звучащие ноты — для аккорда в UI. Safe с потока таймера. */
+    NoteBitmask::Snapshot activeNotes() const { return bridge_.activeNotes(); }
 
     /* Яркость не настраивается — она всегда 1%. Задана константой kNoteColor
      * в mac/include/piano_led/config.h. */
@@ -163,10 +179,8 @@ public:
 
 private:
     void timerCallback() override {
-        if (!bridge_.isOpen()) return;
-
-        /* Кадр уходит только при смене нот. Раз в kKeepaliveMs отправляем
-         * принудительно, чтобы watchdog прошивки не погасил выдержанный аккорд. */
+        /* Кадр собираем всегда — UI рисует аккорд даже без порта.
+         * Уходит на ленту только если порт открыт (см. LedBridge::tick). */
         const juce::int64 now = juce::Time::currentTimeMillis();
         const bool keepalive = (now - lastSendMs_) >= kKeepaliveMs;
 
@@ -183,20 +197,26 @@ private:
         }
     }
 
-    void launchHelperIfNeeded() {
+    bool launchHelperIfNeeded() {
+        if (SerialPort::isLocalPortListening(kBridgeTcpHost, kBridgeTcpPort))
+            return false;
+
+#if JucePlugin_Build_Standalone
+        /* Только Standalone: из песочницы AU posix_spawn наследует sandbox,
+         * занимает порт и мешает настоящему PianoLEDBridge.app открыть USB. */
         const juce::File sibling =
             juce::File::getSpecialLocation(juce::File::currentExecutableFile)
                 .getSiblingFile("ledbridged");
         if (sibling.existsAsFile())
             SerialPort::launchHelper(sibling.getFullPathName().toStdString());
+#endif
 
-        /* Из песочницы GarageBand posix_spawn наследует sandbox и снова не
-         * увидит /dev. LaunchServices открывает отдельное .app без песочницы. */
         const juce::File helperApp =
             juce::File::getSpecialLocation(juce::File::userHomeDirectory)
                 .getChildFile("Library/Application Support/PianoLED/PianoLEDBridge.app");
         if (helperApp.isDirectory())
             juce::Process::openDocument(helperApp.getFullPathName(), juce::String());
+        return true;
     }
 
     LedBridge bridge_;

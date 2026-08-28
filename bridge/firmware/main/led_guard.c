@@ -15,6 +15,16 @@ uint32_t led_guard_estimate_ua(const uint8_t* pixels, size_t byte_count) {
     return total_ua;
 }
 
+void led_guard_clamp_channels(uint8_t* pixels, size_t byte_count, uint8_t max_channel) {
+    size_t i;
+
+    if (pixels == NULL) return;
+
+    for (i = 0; i < byte_count; ++i) {
+        if (pixels[i] > max_channel) pixels[i] = max_channel;
+    }
+}
+
 int led_guard_apply(uint8_t* pixels, size_t byte_count, uint32_t budget_ma) {
     uint32_t estimated_ua;
     uint32_t budget_ua;

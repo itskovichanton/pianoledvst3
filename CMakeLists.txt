@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 project(PianoLED
     VERSION 0.1.0
     DESCRIPTION "MIDI-driven piano LED visualizer (AU + VST3)"
-    LANGUAGES C CXX
+    LANGUAGES C CXX OBJCXX
 )
 
 set(CMAKE_CXX_STANDARD 17)
@@ -24,8 +24,11 @@ FetchContent_MakeAvailable(JUCE)
 
 add_subdirectory(bridge EXCLUDE_FROM_ALL)
 
-add_executable(ledbridged bridge/mac/tools/ledbridged.cpp)
-target_link_libraries(ledbridged PRIVATE piano_led_bridge)
+add_executable(ledbridged
+    bridge/mac/tools/ledbridged.cpp
+    bridge/mac/src/helper_app.mm
+)
+target_link_libraries(ledbridged PRIVATE piano_led_bridge "-framework Cocoa")
 
 set(PIANOLED_HELPER_APP "$ENV{HOME}/Library/Application Support/PianoLED/PianoLEDBridge.app")
 add_custom_command(TARGET ledbridged POST_BUILD
@@ -44,7 +47,7 @@ juce_add_plugin(PianoLED
     BUNDLE_ID com.pianoled.plugin
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
-    NEEDS_MIDI_OUTPUT TRUE
+    NEEDS_MIDI_OUTPUT FALSE
     IS_MIDI_EFFECT FALSE
     EDITOR_WANTS_KEYBOARD_FOCUS FALSE
     COPY_PLUGIN_AFTER_BUILD TRUE

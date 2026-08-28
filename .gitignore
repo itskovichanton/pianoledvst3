@@ -15,3 +15,5 @@ CMakeUserPresets.json
 *.xcuserstate
 xcuserdata/
 compile_commands.json
+*.iml
+build

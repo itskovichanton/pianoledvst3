@@ -129,20 +129,9 @@ int listenLocal() {
 
 }  // namespace
 
-int main() {
-    ::signal(SIGPIPE, SIG_IGN);
+extern "C" void pianoled_run_app_loop(void);
 
-    const int listener = listenLocal();
-    if (listener < 0) {
-        if (errno == EADDRINUSE) return 0;
-        std::cerr << "ledbridged: не удалось слушать " << kBridgeTcpHost << ":" << kBridgeTcpPort
-                  << ": " << std::strerror(errno) << "\n";
-        return 1;
-    }
-
-    std::cerr << "ledbridged: " << kBridgeTcpHost << ":" << kBridgeTcpPort
-              << " — жду плагин, USB открою при подключении\n";
-
+static void serveForever(int listener) {
     for (;;) {
         sockaddr_in clientAddr{};
         socklen_t len = sizeof(clientAddr);
@@ -179,5 +168,23 @@ int main() {
     }
 
     ::close(listener);
+}
+
+int main() {
+    ::signal(SIGPIPE, SIG_IGN);
+
+    const int listener = listenLocal();
+    if (listener < 0) {
+        if (errno == EADDRINUSE) return 0;
+        std::cerr << "ledbridged: не удалось слушать " << kBridgeTcpHost << ":" << kBridgeTcpPort
+                  << ": " << std::strerror(errno) << "\n";
+        return 1;
+    }
+
+    std::cerr << "ledbridged: " << kBridgeTcpHost << ":" << kBridgeTcpPort
+              << " — жду плагин, USB открою при подключении\n";
+
+    std::thread(serveForever, listener).detach();
+    pianoled_run_app_loop();
     return 0;
 }

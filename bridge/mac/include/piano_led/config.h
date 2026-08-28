@@ -15,7 +15,7 @@ namespace piano_led {
  * 34 мА при бюджете 150 мА. Плюс прошивка независимо считает ток каждого кадра
  * и притушила бы его, если бы он вышел за лимит (см. led_guard.c).
  */
-inline constexpr Rgb kNoteColor{3, 0, 0};
+inline constexpr Rgb kNoteColor{3, 0, 0}; /* 3/255 ≈ 1%. Прошивка тоже режет до 3. */
 
 /**
  * Локальный мост для GarageBand: AU в песочнице не видит /dev/cu.usbmodem*,

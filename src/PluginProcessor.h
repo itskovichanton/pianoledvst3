@@ -3,7 +3,7 @@
 #include "LedBridgeGlue.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
-#include <atomic>
+#include <vector>
 
 class PianoLEDAudioProcessor final : public juce::AudioProcessor
 {
@@ -25,7 +25,7 @@ public:
     const juce::String getName() const override { return JucePlugin_Name; }
 
     bool acceptsMidi() const override { return true; }
-    bool producesMidi() const override { return true; }
+    bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
@@ -38,8 +38,9 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    int getLastMidiNote() const { return lastMidiNote.load (std::memory_order_relaxed); }
-    int getLastMidiVelocity() const { return lastMidiVelocity.load (std::memory_order_relaxed); }
+    piano_led::NoteBitmask::Snapshot getActiveNotes() const { return ledBridge.activeNotes(); }
+    const piano_led::StripLayout& ledLayout() const { return ledBridge.layout(); }
+    const std::vector<std::uint8_t>& lastLedFrame() const { return ledBridge.lastFrame(); }
 
     bool isLedConnected() const { return ledBridge.isConnected(); }
     juce::String ledDevicePath() const { return ledBridge.devicePath(); }
@@ -48,8 +49,6 @@ public:
 
 private:
     piano_led::PluginLedBridge ledBridge;
-    std::atomic<int> lastMidiNote { -1 };
-    std::atomic<int> lastMidiVelocity { 0 };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PianoLEDAudioProcessor)
 };

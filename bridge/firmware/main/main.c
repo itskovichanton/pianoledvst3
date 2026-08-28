@@ -119,6 +119,9 @@ static void apply_pixel_frame(const uint8_t* payload, uint16_t length) {
         memset(s_pixels + usable, 0, sizeof(s_pixels) - usable);
     }
 
+    /* Сначала 1% на канал — иначе бюджет 150 мА всё равно оставит ленту яркой. */
+    led_guard_clamp_channels(s_pixels, sizeof(s_pixels), LED_GUARD_MAX_CHANNEL);
+
     if (led_guard_apply(s_pixels, sizeof(s_pixels), CURRENT_BUDGET_MA)) {
         ++s_frames_clamped;
         /* Сообщаем не каждый раз, а на первом срабатывании и далее изредка:

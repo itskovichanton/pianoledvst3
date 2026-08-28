@@ -71,6 +71,23 @@ void test_current_estimate() {
               std::to_string(halfMa) + ")");
 }
 
+void test_channel_cap_at_one_percent() {
+    begin_test("Защита — канал не выше 1% независимо от хоста");
+
+    std::vector<std::uint8_t> one = makeFrame(1, 255, 128, 40);
+    led_guard_clamp_channels(one.data(), one.size(), LED_GUARD_MAX_CHANNEL);
+    check_eq(int(one[0]), int(LED_GUARD_MAX_CHANNEL), "красный обрезан до 3");
+    check_eq(int(one[1]), int(LED_GUARD_MAX_CHANNEL), "зелёный обрезан до 3");
+    check_eq(int(one[2]), int(LED_GUARD_MAX_CHANNEL), "синий обрезан до 3");
+    check_eq(int(one[3]), 0, "соседний светодиод не зажёгся");
+
+    std::vector<std::uint8_t> dim = makeFrame(4, 3, 0, 0);
+    led_guard_clamp_channels(dim.data(), dim.size(), LED_GUARD_MAX_CHANNEL);
+    check_eq(int(dim[0]), 3, "рабочий кадр плагина не меняется");
+
+    led_guard_clamp_channels(nullptr, 100, LED_GUARD_MAX_CHANNEL);
+}
+
 void test_one_percent_is_safe() {
     begin_test("Защита по току — рабочий режим 1%");
 
@@ -303,6 +320,7 @@ int main() {
     std::cout << "Тесты логики прошивки (те же .c, что уедут на плату)\n";
 
     test_current_estimate();
+    test_channel_cap_at_one_percent();
     test_one_percent_is_safe();
     test_clamps_over_budget();
     test_clamp_preserves_color_ratio();

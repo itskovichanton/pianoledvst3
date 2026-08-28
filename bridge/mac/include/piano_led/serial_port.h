@@ -93,6 +93,12 @@ public:
     /** Запускает unsandboxed helper и сразу возвращается. Если уже слушает — ок. */
     static bool launchHelper(const std::string& executablePath, std::string* error = nullptr);
 
+    /**
+     * Занят ли локальный TCP-порт (наш helper). Не connect(): connect забрал бы
+     * единственный accept и открыл USB вхолостую.
+     */
+    static bool isLocalPortListening(const std::string& host, int port);
+
 private:
     int fd_ = -1;
     std::string path_;
