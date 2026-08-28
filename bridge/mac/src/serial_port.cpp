@@ -38,6 +38,15 @@ std::int64_t nowMs() {
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
+void setNoSigPipe(int fd) {
+#if defined(SO_NOSIGPIPE)
+    const int one = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#else
+    (void)fd;
+#endif
+}
+
 }  // namespace
 
 SerialPort::~SerialPort() {
@@ -180,6 +189,11 @@ bool SerialPort::writeAll(const std::uint8_t* data, std::size_t size, std::strin
 
         if (n < 0 && errno == EINTR) continue;  // сигнал прервал — просто повторяем
 
+        if (n < 0 && (errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN)) {
+            setError(error, "связь с лентой оборвалась");
+            return false;
+        }
+
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             /* Буфер драйвера полон. Ждём готовности к записи, а не крутим
              * процессор впустую. */
@@ -305,6 +319,7 @@ bool SerialPort::openUnix(const std::string& path, std::string* error) {
         setError(error, errnoText("unix socket"));
         return false;
     }
+    setNoSigPipe(fd);
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;

@@ -69,7 +69,7 @@ void LedBridge::adoptPortFd(int fd, std::string label) {
     port_.adoptFd(fd, std::move(label));
 }
 
-bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
+bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp, int helperAttempts) {
     const std::vector<std::string> candidates = SerialPort::listCandidates();
     std::string report;
 
@@ -89,9 +89,10 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
     }
 
     if (tryTcp) {
+        if (helperAttempts < 1) helperAttempts = 1;
         std::string unixError;
         bool unixOpen = false;
-        for (int attempt = 0; attempt < 10; ++attempt) {
+        for (int attempt = 0; attempt < helperAttempts; ++attempt) {
             led_proto_decoder_init(&decoder_);
             everSent_ = false;
             havePong_ = false;
@@ -100,7 +101,8 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
                 unixOpen = true;
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            if (attempt + 1 < helperAttempts)
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
         if (unixOpen && probe(replyTimeoutMs)) return true;
         port_.close();
@@ -111,7 +113,7 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
 
         std::string tcpError;
         bool tcpOpen = false;
-        for (int attempt = 0; attempt < 10; ++attempt) {
+        for (int attempt = 0; attempt < helperAttempts; ++attempt) {
             led_proto_decoder_init(&decoder_);
             everSent_ = false;
             havePong_ = false;
@@ -120,7 +122,8 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
                 tcpOpen = true;
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+            if (attempt + 1 < helperAttempts)
+                std::this_thread::sleep_for(std::chrono::milliseconds(150));
         }
         if (tcpOpen && probe(replyTimeoutMs)) return true;
         port_.close();

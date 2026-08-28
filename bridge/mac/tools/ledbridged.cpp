@@ -30,6 +30,7 @@
 #include <thread>
 #include <vector>
 
+#include "led_protocol.h"
 #include "piano_led/config.h"
 #include "piano_led/serial_port.h"
 
@@ -47,6 +48,7 @@ FILE* g_log = nullptr;
 SerialPort g_usb;
 std::mutex g_usbMu;
 std::atomic<int> g_liveClients{0};
+std::chrono::steady_clock::time_point g_lastForceOpen{};
 
 void logLine(const char* fmt, ...) {
     if (g_log == nullptr) return;
@@ -105,7 +107,54 @@ bool writeAtomic(const std::string& path, const std::uint8_t* data, std::size_t 
     return ::rename(tmp.c_str(), path.c_str()) == 0;
 }
 
-bool openUsbLocked() {
+bool usbFdHealthyLocked() {
+    if (!g_usb.isOpen()) return false;
+    pollfd p{};
+    p.fd = g_usb.nativeFd();
+    p.events = POLLIN;
+    const int ready = ::poll(&p, 1, 0);
+    if (ready < 0) return false;
+    if (p.revents & (POLLERR | POLLHUP | POLLNVAL)) return false;
+    return true;
+}
+
+bool pingUsbLocked(int timeoutMs) {
+    if (!g_usb.isOpen()) return false;
+    std::uint8_t encoded[32];
+    const std::size_t n =
+        led_proto_encode(LED_FRAME_PING, nullptr, 0, encoded, sizeof(encoded));
+    if (n == 0) return false;
+    std::string error;
+    if (!g_usb.writeAll(encoded, n, &error, 200)) {
+        logLine("USB ping write: %s", error.c_str());
+        g_usb.close();
+        return false;
+    }
+
+    led_proto_decoder_t decoder;
+    led_proto_decoder_init(&decoder);
+    std::uint8_t buf[128];
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto got = g_usb.readSome(buf, sizeof(buf));
+        if (got < 0) {
+            logLine("USB ping read error");
+            g_usb.close();
+            return false;
+        }
+        for (std::ptrdiff_t i = 0; i < got; ++i) {
+            if (led_proto_decoder_push(&decoder, buf[static_cast<std::size_t>(i)]) != 0 &&
+                decoder.type == LED_FRAME_PONG)
+                return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(15));
+    }
+    logLine("USB ping timeout — дескриптор мёртвый, закрываю");
+    g_usb.close();
+    return false;
+}
+
+bool tryOpenUsbLocked() {
     if (g_usb.isOpen()) return true;
     const std::vector<std::string> candidates = SerialPort::listCandidates();
     for (const std::string& path : candidates) {
@@ -117,6 +166,22 @@ bool openUsbLocked() {
         logLine("USB %s — %s", path.c_str(), error.c_str());
     }
     return false;
+}
+
+bool ensureUsbLocked() {
+    if (g_usb.isOpen() && pingUsbLocked(400)) return true;
+    g_usb.close();
+
+    const auto now = std::chrono::steady_clock::now();
+    if (g_lastForceOpen.time_since_epoch().count() != 0 &&
+        now - g_lastForceOpen < std::chrono::seconds(3)) {
+        return false;
+    }
+    g_lastForceOpen = now;
+    if (!tryOpenUsbLocked()) return false;
+    /* CDC open ресетит C6. Не открывать снова, пока прошивка не ответит. */
+    std::this_thread::sleep_for(std::chrono::milliseconds(800));
+    return pingUsbLocked(2500);
 }
 
 bool splice(int a, int b) {
@@ -154,9 +219,9 @@ void serveClient(int client) {
     {
         std::lock_guard<std::mutex> lock(g_usbMu);
         g_liveClients.fetch_add(1);
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (std::chrono::steady_clock::now() < deadline && !openUsbLocked())
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+        while (std::chrono::steady_clock::now() < deadline && !ensureUsbLocked())
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
         if (g_usb.isOpen()) usbFd = g_usb.nativeFd();
     }
 
@@ -174,8 +239,10 @@ void serveClient(int client) {
     {
         std::lock_guard<std::mutex> lock(g_usbMu);
         g_liveClients.fetch_sub(1);
+        if (g_usb.isOpen() && !pingUsbLocked(250))
+            logLine("USB не отвечает после клиента");
     }
-    logLine("клиент отключился, USB оставляю открытым");
+    logLine("клиент отключился");
 }
 
 int listenTcp() {
@@ -300,16 +367,26 @@ std::vector<std::uint8_t> takeFile(const std::string& path) {
 void pollDropDir() {
     std::lock_guard<std::mutex> lock(g_usbMu);
     if (g_liveClients.load() > 0) return;
-    if (!openUsbLocked()) return;
+    if (!g_usb.isOpen()) tryOpenUsbLocked();
+    if (!g_usb.isOpen()) return;
 
     const auto outgoing = takeFile(std::string(kBridgeDropDir) + "/to_esp");
     if (!outgoing.empty()) {
         std::string error;
-        g_usb.writeAll(outgoing.data(), outgoing.size(), &error, 200);
+        if (!g_usb.writeAll(outgoing.data(), outgoing.size(), &error, 200)) {
+            logLine("drop write: %s", error.c_str());
+            g_usb.close();
+            return;
+        }
     }
 
     std::uint8_t buf[1024];
     const auto n = g_usb.readSome(buf, sizeof(buf));
+    if (n < 0) {
+        logLine("USB read error, закрываю");
+        g_usb.close();
+        return;
+    }
     if (n > 0) {
         writeAtomic(std::string(kBridgeDropDir) + "/from_esp", buf, static_cast<std::size_t>(n));
     }
@@ -317,12 +394,17 @@ void pollDropDir() {
 
 void onTimer(void*) {
     static int ticks = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_usbMu);
-        if (g_liveClients.load() == 0 && !g_usb.isOpen()) openUsbLocked();
+    ++ticks;
+    /* ~3 с: не долбить CDC, иначе C6 вечно ресетится и не отвечает на PING. */
+    if (ticks % 375 == 0) {
+        {
+            std::lock_guard<std::mutex> lock(g_usbMu);
+            if (g_liveClients.load() == 0)
+                ensureUsbLocked();
+        }
+        writeStatus();
     }
     pollDropDir();
-    if ((++ticks % 62) == 0) writeStatus();
 }
 
 }  // namespace
@@ -336,7 +418,7 @@ int main() {
     ensureDropDir();
     {
         std::lock_guard<std::mutex> lock(g_usbMu);
-        openUsbLocked();
+        tryOpenUsbLocked();
     }
     writeStatus();
 

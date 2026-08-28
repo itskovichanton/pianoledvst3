@@ -570,11 +570,10 @@ void PianoLEDAudioProcessorEditor::timerCallback()
         {
             connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xffe08a7e));
             auto error = processorRef.ledLastError().trim();
-            if (error.isEmpty())
-                connectionLabel.setText ("LED strip: not connected", juce::dontSendNotification);
-            else
-                connectionLabel.setText ("LED strip: " + error.substring (0, 280),
-                                         juce::dontSendNotification);
+            juce::String text = utf8 (u8"LED strip: \u043f\u0435\u0440\u0435\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u044e\u0441\u044c\u2026");
+            if (error.isNotEmpty())
+                text += "  |  " + error.substring (0, 220);
+            connectionLabel.setText (text, juce::dontSendNotification);
         }
     }
 

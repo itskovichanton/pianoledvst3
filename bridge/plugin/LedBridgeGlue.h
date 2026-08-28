@@ -131,8 +131,9 @@ public:
         std::string error;
         const bool connected = bridge_.openAuto(&error, 3000);
         if (!connected) lastError_ = error;
-
         startTimerHz(kFramesPerSecond);
+        if (!connected)
+            nextReconnectMs_ = juce::Time::currentTimeMillis() + 1000;
         return connected;
     }
 
@@ -149,14 +150,9 @@ public:
 
     /** Повторная попытка подключения — например по кнопке в редакторе. */
     bool reconnect() {
-        if (bridge_.isOpen()) return true;
-
-        const bool launched = launchHelperIfNeeded();
-        if (launched) juce::Thread::sleep(700);
-        std::string error;
-        const bool connected = bridge_.openAuto(&error, 3000);
-        if (!connected) lastError_ = error;
-        return connected;
+        bridge_.close();
+        nextReconnectMs_ = 0;
+        return reconnectInternal(false);
     }
 
     bool isConnected() const { return bridge_.isOpen(); }
@@ -239,13 +235,33 @@ private:
 
         if (result == TickResult::sent) {
             lastSendMs_ = now;
+            nextReconnectMs_ = 0;
         } else if (result == TickResult::writeFailed) {
-            /* Провод выдернули. Закрываем порт, чтобы следующий reconnect()
-             * начал с чистого листа, и молчим — плагин должен продолжать
-             * работать без ленты. */
+            /* Провод выдернули. Закрываем порт без SIGPIPE (SO_NOSIGPIPE),
+             * чтобы AU-хост GarageBand не умер, и позже переподключимся. */
             lastError_ = bridge_.lastError();
+            if (lastError_.empty()) lastError_ = "кабель отключили";
             bridge_.close();
+            nextReconnectMs_ = now + 400;
         }
+
+        if (!bridge_.isOpen() && nextReconnectMs_ > 0 && now >= nextReconnectMs_) {
+            nextReconnectMs_ = now + 1500;
+            reconnectInternal(true);
+        }
+    }
+
+    bool reconnectInternal(bool quick) {
+        if (bridge_.isOpen()) return true;
+
+        const bool launched = launchHelperIfNeeded();
+        if (launched) juce::Thread::sleep(quick ? 400 : 700);
+        std::string error;
+        const int probeMs = quick ? 1200 : 4000;
+        const int attempts = quick ? 1 : 8;
+        const bool connected = bridge_.openAuto(&error, probeMs, true, attempts);
+        if (!connected) lastError_ = error;
+        return connected;
     }
 
     bool launchHelperIfNeeded() {
@@ -275,6 +291,7 @@ private:
 
     LedBridge bridge_;
     juce::int64 lastSendMs_ = 0;
+    juce::int64 nextReconnectMs_ = 0;
     std::string lastError_;
     int previewNote_ = -1;
     int previewSentNote_ = -1;

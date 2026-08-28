@@ -62,7 +62,7 @@ public:
      *               иначе он подключится сам к себе.
      */
     bool openAuto(std::string* error = nullptr, int replyTimeoutMs = 2000,
-                  bool tryTcp = true);
+                  bool tryTcp = true, int helperAttempts = 10);
 
     /**
      * Повторяет PING, пока плата не ответит или не истечёт timeoutMs.
