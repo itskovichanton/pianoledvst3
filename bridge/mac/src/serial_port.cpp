@@ -9,12 +9,15 @@
 #include <spawn.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/un.h>
 #include <termios.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <ctime>
 
 extern char** environ;
 
@@ -114,10 +117,50 @@ void SerialPort::close() {
         fd_ = -1;
     }
     path_.clear();
+    dropDir_.clear();
+}
+
+bool SerialPort::isOpen() const {
+    return fd_ >= 0 || !dropDir_.empty();
 }
 
 bool SerialPort::writeAll(const std::uint8_t* data, std::size_t size, std::string* error,
                           int timeoutMs) {
+    if (!dropDir_.empty()) {
+        if (data == nullptr && size > 0) {
+            setError(error, "нечего писать");
+            return false;
+        }
+        const std::string dest = dropDir_ + "/to_esp";
+        const std::string tmp = dest + ".tmp";
+        const int out = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (out < 0) {
+            setError(error, errnoText("не удалось записать " + tmp));
+            return false;
+        }
+        std::size_t written = 0;
+        while (written < size) {
+            const ssize_t n = ::write(out, data + written, size - written);
+            if (n > 0) {
+                written += static_cast<std::size_t>(n);
+                continue;
+            }
+            if (n < 0 && errno == EINTR) continue;
+            ::close(out);
+            ::unlink(tmp.c_str());
+            setError(error, errnoText("запись в " + tmp));
+            return false;
+        }
+        ::close(out);
+        if (::rename(tmp.c_str(), dest.c_str()) != 0) {
+            ::unlink(tmp.c_str());
+            setError(error, errnoText("rename " + dest));
+            return false;
+        }
+        setError(error, "");
+        return true;
+    }
+
     if (fd_ < 0) {
         setError(error, "порт не открыт");
         return false;
@@ -168,6 +211,21 @@ bool SerialPort::writeAll(const std::uint8_t* data, std::size_t size, std::strin
 }
 
 std::ptrdiff_t SerialPort::readSome(std::uint8_t* buffer, std::size_t capacity) {
+    if (!dropDir_.empty()) {
+        if (buffer == nullptr || capacity == 0) return -1;
+        const std::string src = dropDir_ + "/from_esp";
+        const int in = ::open(src.c_str(), O_RDONLY | O_NONBLOCK);
+        if (in < 0) return 0;
+        const ssize_t n = ::read(in, buffer, capacity);
+        ::close(in);
+        if (n > 0) ::unlink(src.c_str());
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) return 0;
+            return -1;
+        }
+        return static_cast<std::ptrdiff_t>(n);
+    }
+
     if (fd_ < 0 || buffer == nullptr || capacity == 0) return -1;
 
     const ssize_t n = ::read(fd_, buffer, capacity);
@@ -235,6 +293,69 @@ bool SerialPort::openTcp(const std::string& host, int port, std::string* error) 
 
     fd_ = fd;
     path_ = "tcp://" + host + ":" + std::to_string(port);
+    setError(error, "");
+    return true;
+}
+
+bool SerialPort::openUnix(const std::string& path, std::string* error) {
+    close();
+
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0) {
+        setError(error, errnoText("unix socket"));
+        return false;
+    }
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    if (path.size() >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        setError(error, "слишком длинный путь unix-сокета");
+        return false;
+    }
+    std::strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        const std::string text = errnoText("не удалось подключиться к " + path);
+        ::close(fd);
+        setError(error, text);
+        return false;
+    }
+
+    const int flags = ::fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    fd_ = fd;
+    path_ = "unix://" + path;
+    setError(error, "");
+    return true;
+}
+
+bool SerialPort::openDropDir(const std::string& dir, std::string* error) {
+    close();
+
+    const std::string statusPath = dir + "/status";
+    const int fd = ::open(statusPath.c_str(), O_RDONLY);
+    if (fd < 0) {
+        setError(error, "helper не пишет " + statusPath);
+        return false;
+    }
+    struct stat st {};
+    const int stRc = ::fstat(fd, &st);
+    char buf[128] = {};
+    const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+    ::close(fd);
+    if (n < 2 || std::strncmp(buf, "ok", 2) != 0) {
+        setError(error, "helper ещё не открыл USB");
+        return false;
+    }
+    if (stRc != 0 || (std::time(nullptr) - st.st_mtime) > 4) {
+        setError(error, "helper не отвечает (status старше 4 с)");
+        return false;
+    }
+
+    dropDir_ = dir;
+    path_ = "drop://" + dir;
     setError(error, "");
     return true;
 }

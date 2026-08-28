@@ -371,6 +371,76 @@ void test_frame_custom_geometry() {
     check_eq(litLeds(builder.frame()), std::string("2,3"), "вторая клавиша -> диоды 2,3");
 }
 
+void test_variable_key_sizes_shift_neighbors() {
+    begin_test("StripLayout — размер клавиши сдвигает следующие диоды");
+
+    StripLayout layout;
+    layout.makeSizesExplicit();
+    layout.startLed = 0;
+    layout.setKeySize(0, 3);
+    layout.setKeySize(1, 2);
+    layout.setKeySize(2, 3);
+
+    check_eq(layout.ledStartForKey(0), 0, "первая клавиша с диода 0");
+    check_eq(layout.ledStartForKey(1), 3, "вторая сразу после размера первой");
+    check_eq(layout.ledStartForKey(2), 5, "третья сдвинулась на 2, а не на 3");
+
+    layout.setKeySize(1, 4);
+    check_eq(layout.ledStartForKey(2), 7, "увеличение размера сдвинуло хвост");
+
+    FrameBuilder builder(layout);
+    NoteBitmask notes;
+    notes.noteOn(37);  // вторая клавиша, C#2
+    builder.build(notes.snapshot(), Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("3,4,5,6"), "вторая клавиша — 4 диода");
+}
+
+void test_start_led_and_key_count() {
+    begin_test("StripLayout — стартовый диод и число клавиш");
+
+    StripLayout layout;
+    layout.startLed = 10;
+    layout.setMappedKeyCount(12);
+    check_eq(layout.keyCount(), 12, "клавиш стало 12");
+    check_eq(layout.highestNote(), 47, "12 клавиш от C2 заканчиваются на B2");
+    check_eq(layout.ledStartForKey(0), 10, "первая клавиша начинается с диода 10");
+}
+
+void test_frame_single_led() {
+    begin_test("FrameBuilder — один диод для бегущего теста");
+
+    FrameBuilder builder(StripLayout{});
+    NoteBitmask notes;
+    builder.build(notes.snapshot(), Rgb(3, 0, 0));
+    builder.lightLed(0, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("0"), "первый диод ленты");
+
+    builder.clear();
+    builder.lightLed(143, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("143"), "последний диод ленты");
+
+    builder.lightLed(-1, Rgb(3, 0, 0));
+    builder.lightLed(144, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("143"), "индекс вне ленты игнорируется");
+}
+
+void test_bridge_chase_overrides_notes() {
+    begin_test("LedBridge — бегущий диод перекрывает ноты");
+
+    LedBridge bridge(StripLayout{});
+    bridge.noteOn(60);
+    bridge.tick();
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"), "нота C4 зажглась");
+
+    bridge.setChaseLed(5, true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("5"), "на ленте только бегущий диод");
+
+    bridge.setChaseLed(-1, false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"), "после теста нота вернулась");
+}
+
 /* ══════════════════════ ток ══════════════════════ */
 
 void test_current_estimate() {
@@ -494,6 +564,10 @@ int main() {
     test_frame_reversed_strip();
     test_frame_clears_previous();
     test_frame_custom_geometry();
+    test_variable_key_sizes_shift_neighbors();
+    test_start_led_and_key_count();
+    test_frame_single_led();
+    test_bridge_chase_overrides_notes();
 
     test_current_estimate();
 

@@ -24,4 +24,8 @@ inline constexpr Rgb kNoteColor{3, 0, 0}; /* 3/255 ≈ 1%. Прошивка то
 inline constexpr const char* kBridgeTcpHost = "127.0.0.1";
 inline constexpr int kBridgeTcpPort = 17321;
 
+/** Unix-сокет и файловый канал: AU в GarageBand сидит в процессе без TCP. */
+inline constexpr const char* kBridgeUnixPath = "/tmp/pianoled.sock";
+inline constexpr const char* kBridgeDropDir = "/tmp/pianoled-bridge";
+
 }  // namespace piano_led

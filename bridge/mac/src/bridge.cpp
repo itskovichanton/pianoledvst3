@@ -31,9 +31,19 @@ LedBridge::LedBridge(StripLayout layout) : builder_(layout) {
 }
 
 void LedBridge::setLayout(StripLayout layout) {
-    builder_ = FrameBuilder(layout);
+    builder_ = FrameBuilder(std::move(layout));
     outBuffer_.assign(builder_.frameSize() + LED_PROTO_OVERHEAD, 0u);
     everSent_ = false;  // геометрия сменилась, прошлый кадр больше не показателен
+}
+
+void LedBridge::setPreviewNote(int midiNote, bool lit) {
+    previewNote_ = midiNote;
+    previewLit_ = lit;
+}
+
+void LedBridge::setChaseLed(int ledIndex, bool lit) {
+    chaseLed_ = ledIndex;
+    chaseLit_ = lit;
 }
 
 bool LedBridge::open(const std::string& devicePath, std::string* error) {
@@ -79,6 +89,26 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
     }
 
     if (tryTcp) {
+        std::string unixError;
+        bool unixOpen = false;
+        for (int attempt = 0; attempt < 10; ++attempt) {
+            led_proto_decoder_init(&decoder_);
+            everSent_ = false;
+            havePong_ = false;
+            logs_.clear();
+            if (port_.openUnix(kBridgeUnixPath, &unixError)) {
+                unixOpen = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        }
+        if (unixOpen && probe(replyTimeoutMs)) return true;
+        port_.close();
+        if (!unixError.empty())
+            report += "  unix " + std::string(kBridgeUnixPath) + " — " + unixError + "\n";
+        else if (unixOpen)
+            report += "  unix — открылся, но не ответил на PING\n";
+
         std::string tcpError;
         bool tcpOpen = false;
         for (int attempt = 0; attempt < 10; ++attempt) {
@@ -97,15 +127,29 @@ bool LedBridge::openAuto(std::string* error, int replyTimeoutMs, bool tryTcp) {
         if (!tcpError.empty())
             report += "  helper " + std::string(kBridgeTcpHost) + ":" +
                       std::to_string(kBridgeTcpPort) + " — " + tcpError + "\n";
-        else
+        else if (tcpOpen)
             report += "  helper — открылся, но не ответил на PING\n";
+
+        std::string dropError;
+        led_proto_decoder_init(&decoder_);
+        everSent_ = false;
+        havePong_ = false;
+        logs_.clear();
+        if (port_.openDropDir(kBridgeDropDir, &dropError) && probe(replyTimeoutMs)) return true;
+        port_.close();
+        if (!dropError.empty())
+            report += "  drop " + std::string(kBridgeDropDir) + " — " + dropError + "\n";
+        else
+            report += "  drop — каталог открылся, но лента не ответила на PING\n";
     }
 
     if (candidates.empty()) {
         lastError_ =
-            "GarageBand не видит USB (песочница AU). Нажми «Подключить ленту» "
-            "или один раз открой PianoLEDBridge.app "
-            "(~/Library/Application Support/PianoLED/).";
+            "GarageBand не видит USB напрямую. Нужен PianoLEDBridge.\n" + report;
+        if (lastError_.size() < 40)
+            lastError_ +=
+                "Нажми «Подключить ленту» или открой "
+                "~/Library/Application Support/PianoLED/PianoLEDBridge.app";
     } else {
         lastError_ = "лента не найдена. Проверенные порты:\n" + report +
                      "Если плата подключена — убедись, что на неё залита прошивка из firmware/";
@@ -138,13 +182,23 @@ bool LedBridge::sendFrame(std::uint8_t type, const std::uint8_t* payload, std::u
 
 TickResult LedBridge::tick(bool force) {
     const NoteBitmask::Snapshot current = notes_.snapshot();
+    const bool previewActive = previewNote_ >= 0;
+    const bool chaseActive = chaseLed_ >= 0;
 
     /* Пока руки неподвижны, по проводу не идёт ничего. Это не оптимизация ради
      * оптимизации: пустой канал означает, что любая активность на нём — это
-     * реально сыгранная нота, и отладка становится тривиальной. */
-    if (!force && everSent_ && current == lastSent_) return TickResult::unchanged;
+     * реально сыгранная нота, и отладка становится тривиальной.
+     * Предпросмотр раскладки и бегущий тест — исключения: кадр должен уходить. */
+    if (!force && everSent_ && current == lastSent_ && !previewActive && !chaseActive)
+        return TickResult::unchanged;
 
-    builder_.build(current, kNoteColor);
+    if (chaseActive && chaseLit_) {
+        builder_.clear();
+        builder_.lightLed(chaseLed_, kNoteColor);
+    } else {
+        builder_.build(current, kNoteColor);
+        if (previewActive && previewLit_) builder_.lightNote(previewNote_, kNoteColor);
+    }
 
     if (!port_.isOpen()) {
         /* Кадр всё равно собрали — UI плагина покажет предпросмотр даже без железа. */

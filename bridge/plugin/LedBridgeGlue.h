@@ -139,6 +139,8 @@ public:
     /** Гасит ленту и останавливает отправку. */
     void stop() {
         stopTimer();
+        chasing_ = false;
+        chaseSentLed_ = -1;
         if (bridge_.isOpen()) {
             bridge_.sendClear();
             bridge_.close();
@@ -168,8 +170,22 @@ public:
      * в mac/include/piano_led/config.h. */
 
     /** Геометрия установки: длина ленты, диодов на клавишу, нижняя нота. */
-    void setLayout(StripLayout layout) { bridge_.setLayout(layout); }
+    void setLayout(StripLayout layout) { bridge_.setLayout(std::move(layout)); }
     const StripLayout& layout() const { return bridge_.layout(); }
+
+    /** Нота для мигания в «Раскладке». -1 выключает. */
+    void setLayoutPreviewNote(int midiNote) { previewNote_ = midiNote; }
+    void setLayoutPreviewHold(bool hold) { previewHold_ = hold; }
+
+    /** Бегущий диод по всей ленте. Повторный вызов начинает сначала. */
+    void startChase() {
+        chasing_ = true;
+        chaseStartMs_ = juce::Time::currentTimeMillis();
+    }
+
+    void stopChase() { chasing_ = false; }
+
+    bool isChasing() const { return chasing_; }
 
     /** Последний собранный кадр — для предпросмотра ленты в редакторе плагина. */
     const std::vector<std::uint8_t>& lastFrame() const { return bridge_.lastFrame(); }
@@ -183,8 +199,43 @@ private:
          * Уходит на ленту только если порт открыт (см. LedBridge::tick). */
         const juce::int64 now = juce::Time::currentTimeMillis();
         const bool keepalive = (now - lastSendMs_) >= kKeepaliveMs;
+        bool force = keepalive;
 
-        const TickResult result = bridge_.tick(keepalive);
+        if (chasing_) {
+            const int leds = bridge_.layout().ledCount;
+            const int index = static_cast<int>((now - chaseStartMs_) / kChaseStepMs);
+            if (leds <= 0 || index >= leds) {
+                chasing_ = false;
+                if (chaseSentLed_ >= 0) {
+                    bridge_.setChaseLed(-1, false);
+                    chaseSentLed_ = -1;
+                    force = true;
+                }
+            } else {
+                if (index != chaseSentLed_) force = true;
+                chaseSentLed_ = index;
+                bridge_.setChaseLed(index, true);
+            }
+        } else if (chaseSentLed_ >= 0) {
+            bridge_.setChaseLed(-1, false);
+            chaseSentLed_ = -1;
+            force = true;
+        }
+
+        if (previewNote_ >= 0) {
+            const bool lit = previewHold_ || ((now / 500) % 2) == 0;
+            if (lit != previewLit_ || previewNote_ != previewSentNote_) force = true;
+            previewLit_ = lit;
+            previewSentNote_ = previewNote_;
+            bridge_.setPreviewNote(previewNote_, lit);
+        } else if (previewSentNote_ >= 0) {
+            bridge_.setPreviewNote(-1, false);
+            previewSentNote_ = -1;
+            previewLit_ = false;
+            force = true;
+        }
+
+        const TickResult result = bridge_.tick(force);
 
         if (result == TickResult::sent) {
             lastSendMs_ = now;
@@ -219,9 +270,19 @@ private:
         return true;
     }
 
+    /** Шаг бегущего теста, мс. 144 диода × 50 мс ≈ 7 с на всю ленту. */
+    static constexpr int kChaseStepMs = 50;
+
     LedBridge bridge_;
     juce::int64 lastSendMs_ = 0;
     std::string lastError_;
+    int previewNote_ = -1;
+    int previewSentNote_ = -1;
+    bool previewLit_ = false;
+    bool previewHold_ = false;
+    bool chasing_ = false;
+    juce::int64 chaseStartMs_ = 0;
+    int chaseSentLed_ = -1;
 };
 
 }  // namespace piano_led

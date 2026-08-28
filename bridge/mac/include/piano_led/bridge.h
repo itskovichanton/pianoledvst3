@@ -109,6 +109,12 @@ public:
     const StripLayout& layout() const { return builder_.layout(); }
     void setLayout(StripLayout layout);
 
+    /** Нота, которую «Раскладка» мигает на ленте. -1 — выключено. */
+    void setPreviewNote(int midiNote, bool lit);
+
+    /** Один диод для теста «бегущий огонь». -1 — выключено. */
+    void setChaseLed(int ledIndex, bool lit);
+
     /** Оценка тока последнего собранного кадра, мА. */
     double estimatedCurrentMa() const { return builder_.estimatedCurrentMa(); }
 
@@ -146,6 +152,12 @@ private:
     bool havePong_ = false;
 
     std::string lastError_;
+
+    int previewNote_ = -1;
+    bool previewLit_ = false;
+
+    int chaseLed_ = -1;
+    bool chaseLit_ = false;
 };
 
 }  // namespace piano_led
