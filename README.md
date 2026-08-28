@@ -1,24 +1,27 @@
 # PianoLED
 
-AU/VST3 инструмент на JUCE 8: каркас под визуализацию нот пианино (LED).
+AU/VST3 инструмент: MIDI из DAW зажигает светодиоды на ленте ESP32-C6.
 
-Сейчас плагин слушает MIDI, не генерирует звук и показывает последнюю ноту в UI. Форматы сборки: **AU**, **VST3** и **Standalone**.
+Раскладка равномерная: **3 LED на клавишу**, 144 светодиода = MIDI **C2–B5** (ноты 36–83). Остальные ноты игнорируются.
 
-GarageBand не загружает MIDI FX (`aumi`) и не шлёт MIDI в обычные эффекты, поэтому PianoLED собран как **AU Music Device** (`aumu`) — его нужно выбирать как инструмент.
+Форматы: **AU**, **VST3**, **Standalone**. Мост USB — [`bridge/`](bridge/) (PianoLedBridge).
 
-## Требования (macOS)
+## Лента без DAW (сначала это)
 
-- Xcode (полный, не только Command Line Tools)
-- CMake 3.24+
-- Git
-
-Если `xcode-select` указывает на Command Line Tools, перед сборкой задайте полный Xcode в этой сессии:
+Прошивка ESP32-C6, GPIO4, 144 × WS2812. Монитор USB не открывать — по тому же порту идут кадры.
 
 ```bash
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+cd bridge/firmware
+./flash.sh
+
+cd ../mac
+./run_ledctl.sh ping
+./run_ledctl.sh scale
 ```
 
-## Сборка
+Гамма побежала — железо исправно. **Закрой ledctl** перед запуском плагина: порт один.
+
+## Сборка плагина
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -28,7 +31,7 @@ cmake --build --preset vst3
 cmake --build --preset au
 ```
 
-Или без presets:
+Или:
 
 ```bash
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
@@ -36,43 +39,44 @@ cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --target PianoLED_Standalone PianoLED_VST3 PianoLED_AU -j
 ```
 
-JUCE подтягивается автоматически через CMake FetchContent (тег `8.0.15`).
+## Logic
 
-## Запуск без DAW (Standalone)
-
-```bash
-open "build/PianoLED_artefacts/Debug/Standalone/PianoLED.app"
-```
-
-В меню приложения можно выбрать MIDI-вход. Сыграйте ноту — в окне появятся pitch и velocity.
-
-## Установка в REAPER
-
-После сборки VST3 (при `COPY_PLUGIN_AFTER_BUILD`) бандл копируется в:
-
-```text
-~/Library/Audio/Plug-Ins/VST3/PianoLED.vst3
-```
-
-1. Откройте REAPER → **Settings** (`Cmd+,`) → **Plug-ins → VST**.
-2. Убедитесь, что в путях есть `~/Library/Audio/Plug-Ins/VST3`.
-3. Включите VST3 и нажмите **Clear cache/re-scan** (или **Re-scan**).
-4. На MIDI-треке откройте **FX** и добавьте **VSTi: PianoLED** (это инструмент, не обычный FX).
-5. Направьте на трек MIDI-вход (клавиатура или Virtual MIDI Keyboard).
-
-## Установка в GarageBand
-
-После сборки AU копируется в:
+После сборки AU:
 
 ```text
 ~/Library/Audio/Plug-Ins/Components/PianoLED.component
 ```
 
-1. Закройте GarageBand, если он открыт.
-2. Откройте GarageBand → новый проект → **Software Instrument**.
-3. Нажмите на слот инструмента в Smart Controls (название пресета слева от дорожки).
-4. В меню генератора выберите **AU Instruments → PianoLED → PianoLED**.
-5. Если пункта нет: **GarageBand → Settings → Audio/MIDI** и включите **Enable Audio Units**, затем перезапустите GarageBand.
-6. Сыграйте на MIDI-клавиатуре или Musical Typing (`Cmd+K`) — в окне плагина появятся ноты.
+1. Закрой `ledctl`, подключи плату.
+2. Logic: Software Instrument → AU **PianoLED**.
+3. Play MIDI в диапазоне **C2–B5**.
+4. В окне плагина: зелёная строка `LED strip: /dev/cu.usbmodem…` и ноты; на ленте зажигаются и гаснут соответствующие тройки светодиодов.
 
-Трек будет без звука: это визуализатор, не синтезатор. Для звука пианино создайте вторую Software Instrument дорожку.
+### GarageBand
+
+Песочница AU не пускает плагин в `/dev/cu.usbmodem*`. Сборка ставит хелпер
+`~/Library/Application Support/PianoLED/PianoLEDBridge.app` — он открывает USB,
+а плагин ходит к нему по localhost.
+
+1. Закрой `ledctl` и `idf.py monitor`.
+2. Если лента не нашлась — нажми **«Подключить ленту»**. Если не помогло:
+
+```bash
+open "$HOME/Library/Application Support/PianoLED/PianoLEDBridge.app"
+```
+
+3. Играй **C2–B5**. A#1 (как на скрине) ниже диапазона, пока трек не транспонирован на +12.
+
+Целевой хост без этой схемы — Logic.
+
+## Standalone
+
+```bash
+open "build/PianoLED_artefacts/Debug/Standalone/PianoLED.app"
+```
+
+## VST3 (если нужен другой хост)
+
+```text
+~/Library/Audio/Plug-Ins/VST3/PianoLED.vst3
+```

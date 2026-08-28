@@ -22,6 +22,23 @@ FetchContent_Declare(JUCE
 
 FetchContent_MakeAvailable(JUCE)
 
+add_subdirectory(bridge EXCLUDE_FROM_ALL)
+
+add_executable(ledbridged bridge/mac/tools/ledbridged.cpp)
+target_link_libraries(ledbridged PRIVATE piano_led_bridge)
+
+set(PIANOLED_HELPER_APP "$ENV{HOME}/Library/Application Support/PianoLED/PianoLEDBridge.app")
+add_custom_command(TARGET ledbridged POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${PIANOLED_HELPER_APP}/Contents/MacOS"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${CMAKE_CURRENT_SOURCE_DIR}/bridge/mac/PianoLEDBridge.plist"
+        "${PIANOLED_HELPER_APP}/Contents/Info.plist"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        $<TARGET_FILE:ledbridged>
+        "${PIANOLED_HELPER_APP}/Contents/MacOS/PianoLEDBridge"
+)
+
 juce_add_plugin(PianoLED
     COMPANY_NAME "PianoLED"
     BUNDLE_ID com.pianoled.plugin
@@ -50,6 +67,7 @@ target_sources(PianoLED
 target_include_directories(PianoLED
     PRIVATE
         src
+        bridge/plugin
 )
 
 target_compile_definitions(PianoLED
@@ -62,8 +80,20 @@ target_compile_definitions(PianoLED
 target_link_libraries(PianoLED
     PRIVATE
         juce::juce_audio_utils
+        piano_led_bridge
     PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+foreach (plugin_target IN ITEMS PianoLED_AU PianoLED_VST3 PianoLED_Standalone)
+    if (TARGET ${plugin_target})
+        add_dependencies(${plugin_target} ledbridged)
+        add_custom_command(TARGET ${plugin_target} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy
+                $<TARGET_FILE:ledbridged>
+                $<TARGET_FILE_DIR:${plugin_target}>/ledbridged
+        )
+    endif()
+endforeach()

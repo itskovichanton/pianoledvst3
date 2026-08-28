@@ -1,5 +1,7 @@
 #pragma once
 
+#include "LedBridgeGlue.h"
+
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <atomic>
 
@@ -11,6 +13,7 @@ public:
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
+    void reset() override;
 
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
@@ -38,7 +41,13 @@ public:
     int getLastMidiNote() const { return lastMidiNote.load (std::memory_order_relaxed); }
     int getLastMidiVelocity() const { return lastMidiVelocity.load (std::memory_order_relaxed); }
 
+    bool isLedConnected() const { return ledBridge.isConnected(); }
+    juce::String ledDevicePath() const { return ledBridge.devicePath(); }
+    juce::String ledLastError() const { return ledBridge.lastError(); }
+    bool reconnectLeds() { return ledBridge.reconnect(); }
+
 private:
+    piano_led::PluginLedBridge ledBridge;
     std::atomic<int> lastMidiNote { -1 };
     std::atomic<int> lastMidiVelocity { 0 };
 

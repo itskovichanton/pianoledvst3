@@ -11,14 +11,23 @@ PianoLEDAudioProcessor::PianoLEDAudioProcessor()
 #endif
       )
 {
+    ledBridge.start();
 }
 
 void PianoLEDAudioProcessor::prepareToPlay (double, int)
 {
+    if (! ledBridge.isConnected())
+        ledBridge.reconnect();
 }
 
 void PianoLEDAudioProcessor::releaseResources()
 {
+    ledBridge.panic();
+}
+
+void PianoLEDAudioProcessor::reset()
+{
+    ledBridge.panic();
 }
 
 bool PianoLEDAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -63,6 +72,8 @@ void PianoLEDAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             lastMidiVelocity.store (0, std::memory_order_relaxed);
         }
     }
+
+    ledBridge.processMidi (midiMessages);
 }
 
 juce::AudioProcessorEditor* PianoLEDAudioProcessor::createEditor()

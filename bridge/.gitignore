@@ -1,0 +1,8 @@
+build/
+cmake-build-*/
+sdkconfig
+managed_components/
+dependencies.lock
+.cache/
+.DS_Store
+*.iml

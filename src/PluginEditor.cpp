@@ -18,7 +18,7 @@ juce::String noteNameFromNumber (int noteNumber)
 PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
-    setSize (420, 240);
+    setSize (440, 320);
     setResizable (false, false);
 
     titleLabel.setText ("PianoLED", juce::dontSendNotification);
@@ -33,7 +33,19 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
     addAndMakeVisible (statusLabel);
 
-    hintLabel.setText ("AU instrument · VST3 + Standalone\nPlay a note to see pitch and velocity.",
+    connectionLabel.setText ("LED strip: looking...", juce::dontSendNotification);
+    connectionLabel.setFont (juce::FontOptions (12.0f));
+    connectionLabel.setJustificationType (juce::Justification::centredTop);
+    connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    addAndMakeVisible (connectionLabel);
+
+    reconnectButton.setButtonText ("Подключить ленту");
+    reconnectButton.onClick = [this] {
+        processorRef.reconnectLeds();
+    };
+    addAndMakeVisible (reconnectButton);
+
+    hintLabel.setText ("3 LEDs per key  ·  C2–B5  ·  AU / VST3 / Standalone",
                        juce::dontSendNotification);
     hintLabel.setFont (juce::FontOptions (13.0f));
     hintLabel.setJustificationType (juce::Justification::centred);
@@ -53,9 +65,13 @@ void PianoLEDAudioProcessorEditor::paint (juce::Graphics& g)
 void PianoLEDAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (24);
-    titleLabel.setBounds (bounds.removeFromTop (48));
-    bounds.removeFromTop (12);
-    statusLabel.setBounds (bounds.removeFromTop (48));
+    titleLabel.setBounds (bounds.removeFromTop (40));
+    bounds.removeFromTop (8);
+    statusLabel.setBounds (bounds.removeFromTop (36));
+    bounds.removeFromTop (4);
+    connectionLabel.setBounds (bounds.removeFromTop (72));
+    bounds.removeFromTop (8);
+    reconnectButton.setBounds (bounds.removeFromTop (28).reduced (80, 0));
     bounds.removeFromTop (8);
     hintLabel.setBounds (bounds);
 }
@@ -74,4 +90,20 @@ void PianoLEDAudioProcessorEditor::timerCallback()
     else
         statusLabel.setText ("Note " + noteNameFromNumber (note) + "  ·  off",
                              juce::dontSendNotification);
+
+    if (processorRef.isLedConnected())
+    {
+        connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
+        connectionLabel.setText ("LED strip: " + processorRef.ledDevicePath(),
+                                 juce::dontSendNotification);
+        return;
+    }
+
+    connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xffe08a7e));
+    auto error = processorRef.ledLastError().trim();
+    if (error.isEmpty())
+        connectionLabel.setText ("LED strip: not connected", juce::dontSendNotification);
+    else
+        connectionLabel.setText ("LED strip: " + error.substring (0, 280),
+                                 juce::dontSendNotification);
 }

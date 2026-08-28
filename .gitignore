@@ -1,4 +1,9 @@
 /build/
+/bridge/firmware/build/
+/bridge/firmware/sdkconfig
+/bridge/firmware/managed_components/
+/bridge/firmware/dependencies.lock
+/bridge/cmake-build-*/
 /cmake-build-*/
 /.idea/
 /.vs/
