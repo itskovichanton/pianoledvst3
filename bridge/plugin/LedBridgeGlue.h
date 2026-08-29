@@ -51,6 +51,8 @@
 
 #include "piano_led/bridge.h"
 
+#include <atomic>
+
 namespace piano_led {
 
 /**
@@ -150,10 +152,12 @@ public:
 
     /** Повторная попытка подключения — например по кнопке в редакторе. */
     bool reconnect() {
-        bridge_.close();
-        nextReconnectMs_ = 0;
-        return reconnectInternal(false);
+        pendingUserReconnect_ = true;
+        connecting_ = true;
+        return false;
     }
+
+    bool isConnecting() const { return connecting_.load(); }
 
     bool isConnected() const { return bridge_.isOpen(); }
     juce::String devicePath() const { return juce::String(bridge_.devicePath()); }
@@ -194,6 +198,16 @@ private:
         /* Кадр собираем всегда — UI рисует аккорд даже без порта.
          * Уходит на ленту только если порт открыт (см. LedBridge::tick). */
         const juce::int64 now = juce::Time::currentTimeMillis();
+
+        if (pendingUserReconnect_.exchange(false)) {
+            connecting_ = true;
+            bridge_.close();
+            nextReconnectMs_ = 0;
+            reconnectInternal(false);
+            connecting_ = false;
+            return;
+        }
+
         const bool keepalive = (now - lastSendMs_) >= kKeepaliveMs;
         bool force = keepalive;
 
@@ -292,6 +306,8 @@ private:
     LedBridge bridge_;
     juce::int64 lastSendMs_ = 0;
     juce::int64 nextReconnectMs_ = 0;
+    std::atomic<bool> connecting_ { false };
+    std::atomic<bool> pendingUserReconnect_ { false };
     std::string lastError_;
     int previewNote_ = -1;
     int previewSentNote_ = -1;

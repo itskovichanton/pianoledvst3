@@ -2,6 +2,8 @@
 
 #include "PluginProcessor.h"
 
+#include <memory>
+
 class PianoLEDAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                            private juce::Timer,
                                            private juce::TableListBoxModel
@@ -43,6 +45,7 @@ private:
     juce::Label statusLabel;
     juce::Label connectionLabel;
     juce::TextButton reconnectButton;
+    std::unique_ptr<juce::Component> connectSpinner;
     juce::TextButton testButton;
     juce::TextButton layoutButton;
     juce::TextButton backButton;

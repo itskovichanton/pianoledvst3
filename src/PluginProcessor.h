@@ -9,7 +9,7 @@ class PianoLEDAudioProcessor final : public juce::AudioProcessor
 {
 public:
     PianoLEDAudioProcessor();
-    ~PianoLEDAudioProcessor() override = default;
+    ~PianoLEDAudioProcessor() override;
 
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -29,11 +29,11 @@ public:
     bool isMidiEffect() const override { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
 
-    int getNumPrograms() override;
-    int getCurrentProgram() override;
-    void setCurrentProgram (int index) override;
-    const juce::String getProgramName (int index) override;
-    void changeProgramName (int index, const juce::String& newName) override;
+    int getNumPrograms() override { return 1; }
+    int getCurrentProgram() override { return 0; }
+    void setCurrentProgram (int) override {}
+    const juce::String getProgramName (int) override;
+    void changeProgramName (int, const juce::String&) override {}
 
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
@@ -46,6 +46,7 @@ public:
     juce::String ledDevicePath() const { return ledBridge.devicePath(); }
     juce::String ledLastError() const { return ledBridge.lastError(); }
     bool reconnectLeds() { return ledBridge.reconnect(); }
+    bool isLedConnecting() const { return ledBridge.isConnecting(); }
 
     void commitLayout (piano_led::StripLayout layout);
     void setLayoutPreviewNote (int midiNote) { ledBridge.setLayoutPreviewNote (midiNote); }
@@ -60,6 +61,10 @@ public:
 
     juce::String saveLayoutPreset (const juce::String& name);
     void refreshPresetCombo (juce::ComboBox& box) const;
+    void persistLayout();
+    int getLayoutProgramIndex() const { return currentProgram; }
+    void setLayoutProgram (int index);
+    juce::String getLayoutProgramName() const;
 
 private:
     struct LayoutPreset
@@ -74,6 +79,12 @@ private:
 
     void ensureDefaultPreset();
     void applyPreset (int index);
+    void syncCurrentPreset();
+    void savePresetsToDisk();
+    void loadPresetsFromDisk();
+    bool applyStateXml (const juce::XmlElement&);
+    void notifyHostState();
+    static std::vector<juce::File> presetStoreFiles();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PianoLEDAudioProcessor)
 };

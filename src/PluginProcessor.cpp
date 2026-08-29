@@ -14,12 +14,18 @@ PianoLEDAudioProcessor::PianoLEDAudioProcessor()
       )
 {
     ledBridge.start();
+    loadPresetsFromDisk();
     ensureDefaultPreset();
+}
+
+PianoLEDAudioProcessor::~PianoLEDAudioProcessor()
+{
+    persistLayout();
 }
 
 void PianoLEDAudioProcessor::prepareToPlay (double, int)
 {
-    if (! ledBridge.isConnected())
+    if (! ledBridge.isConnected() && ! ledBridge.isConnecting())
         ledBridge.reconnect();
 }
 
@@ -72,6 +78,7 @@ juce::AudioProcessorEditor* PianoLEDAudioProcessor::createEditor()
 void PianoLEDAudioProcessor::commitLayout (piano_led::StripLayout layout)
 {
     ledBridge.setLayout (std::move (layout));
+    syncCurrentPreset();
 }
 
 void PianoLEDAudioProcessor::setFirstNote (int midiNote)
@@ -83,6 +90,7 @@ void PianoLEDAudioProcessor::setFirstNote (int midiNote)
     if (layout.highestNote() > 127)
         layout.setMappedKeyCount (128 - midiNote);
     ledBridge.setLayout (std::move (layout));
+    syncCurrentPreset();
 }
 
 void PianoLEDAudioProcessor::setStartLed (int led)
@@ -90,6 +98,7 @@ void PianoLEDAudioProcessor::setStartLed (int led)
     auto layout = ledBridge.layout();
     layout.startLed = juce::jlimit (0, std::max (0, layout.ledCount - 1), led);
     ledBridge.setLayout (std::move (layout));
+    syncCurrentPreset();
 }
 
 void PianoLEDAudioProcessor::setMappedKeyCount (int keys)
@@ -97,6 +106,7 @@ void PianoLEDAudioProcessor::setMappedKeyCount (int keys)
     auto layout = ledBridge.layout();
     layout.setMappedKeyCount (keys);
     ledBridge.setLayout (std::move (layout));
+    syncCurrentPreset();
 }
 
 void PianoLEDAudioProcessor::setKeySize (int keyIndex, int size)
@@ -104,6 +114,7 @@ void PianoLEDAudioProcessor::setKeySize (int keyIndex, int size)
     auto layout = ledBridge.layout();
     layout.setKeySize (keyIndex, size);
     ledBridge.setLayout (std::move (layout));
+    syncCurrentPreset();
 }
 
 namespace
@@ -159,18 +170,7 @@ void PianoLEDAudioProcessor::applyPreset (int index)
     ledBridge.setLayout (presets[static_cast<std::size_t> (index)].layout);
 }
 
-int PianoLEDAudioProcessor::getNumPrograms()
-{
-    ensureDefaultPreset();
-    return static_cast<int> (presets.size());
-}
-
-int PianoLEDAudioProcessor::getCurrentProgram()
-{
-    return currentProgram;
-}
-
-void PianoLEDAudioProcessor::setCurrentProgram (int index)
+void PianoLEDAudioProcessor::setLayoutProgram (int index)
 {
     ensureDefaultPreset();
     if (index < 0 || index >= static_cast<int> (presets.size()) || index == currentProgram)
@@ -178,20 +178,120 @@ void PianoLEDAudioProcessor::setCurrentProgram (int index)
     applyPreset (index);
 }
 
-const juce::String PianoLEDAudioProcessor::getProgramName (int index)
+juce::String PianoLEDAudioProcessor::getLayoutProgramName() const
 {
-    ensureDefaultPreset();
-    if (index < 0 || index >= static_cast<int> (presets.size())) return {};
-    return presets[static_cast<std::size_t> (index)].name;
+    if (currentProgram < 0 || currentProgram >= static_cast<int> (presets.size()))
+        return "Default";
+    return presets[static_cast<std::size_t> (currentProgram)].name;
 }
 
-void PianoLEDAudioProcessor::changeProgramName (int index, const juce::String& newName)
+const juce::String PianoLEDAudioProcessor::getProgramName (int)
+{
+    return getLayoutProgramName();
+}
+
+void PianoLEDAudioProcessor::syncCurrentPreset()
 {
     ensureDefaultPreset();
-    if (index < 0 || index >= static_cast<int> (presets.size())) return;
-    auto name = newName.trim();
-    if (name.isEmpty()) name = "Layout";
-    presets[static_cast<std::size_t> (index)].name = name;
+    if (currentProgram < 0 || currentProgram >= static_cast<int> (presets.size()))
+        return;
+    auto layout = ledBridge.layout();
+    layout.makeSizesExplicit();
+    presets[static_cast<std::size_t> (currentProgram)].layout = std::move (layout);
+}
+
+void PianoLEDAudioProcessor::notifyHostState()
+{
+    updateHostDisplay();
+}
+
+std::vector<juce::File> PianoLEDAudioProcessor::presetStoreFiles()
+{
+    return {
+        juce::File::getSpecialLocation (juce::File::userHomeDirectory)
+            .getChildFile ("Library/Application Support/PianoLED/layouts.xml"),
+        juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+            .getChildFile ("PianoLED/layouts.xml")
+    };
+}
+
+void PianoLEDAudioProcessor::savePresetsToDisk()
+{
+    ensureDefaultPreset();
+    syncCurrentPreset();
+    juce::XmlElement xml ("PianoLED");
+    xml.setAttribute ("current", currentProgram);
+    writeLayoutXml (xml, ledBridge.layout());
+    for (const auto& preset : presets)
+    {
+        auto* child = xml.createNewChildElement ("Preset");
+        child->setAttribute ("name", preset.name);
+        writeLayoutXml (*child, preset.layout);
+    }
+
+    for (auto file : presetStoreFiles())
+    {
+        file.getParentDirectory().createDirectory();
+        xml.writeTo (file);
+    }
+}
+
+bool PianoLEDAudioProcessor::applyStateXml (const juce::XmlElement& xml)
+{
+    if (! xml.hasTagName ("PianoLED"))
+        return false;
+
+    std::vector<LayoutPreset> loaded;
+    for (auto* child : xml.getChildWithTagNameIterator ("Preset"))
+    {
+        LayoutPreset preset;
+        preset.name = child->getStringAttribute ("name", "Layout");
+        preset.layout = readLayoutXml (*child);
+        loaded.push_back (std::move (preset));
+    }
+
+    if (loaded.empty())
+    {
+        LayoutPreset preset;
+        preset.name = "Default";
+        preset.layout = readLayoutXml (xml);
+        loaded.push_back (std::move (preset));
+    }
+
+    presets = std::move (loaded);
+    currentProgram = xml.getIntAttribute ("current", 0);
+    if (currentProgram < 0 || currentProgram >= static_cast<int> (presets.size()))
+        currentProgram = 0;
+    applyPreset (currentProgram);
+    return true;
+}
+
+void PianoLEDAudioProcessor::loadPresetsFromDisk()
+{
+    juce::File newest;
+    juce::int64 bestTime = -1;
+    for (const auto& file : presetStoreFiles())
+    {
+        if (! file.existsAsFile())
+            continue;
+        const auto time = file.getLastModificationTime().toMilliseconds();
+        if (time >= bestTime)
+        {
+            bestTime = time;
+            newest = file;
+        }
+    }
+    if (! newest.existsAsFile())
+        return;
+    if (auto xml = juce::XmlDocument::parse (newest))
+        applyStateXml (*xml);
+}
+
+void PianoLEDAudioProcessor::persistLayout()
+{
+    syncCurrentPreset();
+    savePresetsToDisk();
+    notifyHostState();
 }
 
 juce::String PianoLEDAudioProcessor::saveLayoutPreset (const juce::String& requestedName)
@@ -220,7 +320,7 @@ juce::String PianoLEDAudioProcessor::saveLayoutPreset (const juce::String& reque
         currentProgram = static_cast<int> (presets.size()) - 1;
     }
 
-    updateHostDisplay();
+    persistLayout();
     return name;
 }
 
@@ -239,6 +339,7 @@ void PianoLEDAudioProcessor::refreshPresetCombo (juce::ComboBox& box) const
 void PianoLEDAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     ensureDefaultPreset();
+    syncCurrentPreset();
     juce::XmlElement xml ("PianoLED");
     xml.setAttribute ("current", currentProgram);
     writeLayoutXml (xml, ledBridge.layout());
@@ -254,30 +355,10 @@ void PianoLEDAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 void PianoLEDAudioProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
     auto xml = getXmlFromBinary (data, sizeInBytes);
-    if (xml == nullptr || ! xml->hasTagName ("PianoLED"))
+    if (xml == nullptr)
         return;
-
-    presets.clear();
-    for (auto* child : xml->getChildWithTagNameIterator ("Preset"))
-    {
-        LayoutPreset preset;
-        preset.name = child->getStringAttribute ("name", "Layout");
-        preset.layout = readLayoutXml (*child);
-        presets.push_back (std::move (preset));
-    }
-
-    if (presets.empty())
-    {
-        LayoutPreset preset;
-        preset.name = "Default";
-        preset.layout = readLayoutXml (*xml);
-        presets.push_back (std::move (preset));
-    }
-
-    currentProgram = xml->getIntAttribute ("current", 0);
-    if (currentProgram < 0 || currentProgram >= static_cast<int> (presets.size()))
-        currentProgram = 0;
-    applyPreset (currentProgram);
+    if (applyStateXml (*xml))
+        savePresetsToDisk();
 }
 
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()

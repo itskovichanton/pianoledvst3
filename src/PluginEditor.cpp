@@ -72,6 +72,24 @@ private:
     int row = 0;
 };
 
+class ConnectSpinner final : public juce::Component
+{
+public:
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced (2.0f);
+        const auto t = (float) (juce::Time::getMillisecondCounter() % 900) / 900.0f;
+        const auto start = t * juce::MathConstants<float>::twoPi;
+        juce::Path arc;
+        arc.addCentredArc (bounds.getCentreX(), bounds.getCentreY(),
+                           bounds.getWidth() * 0.5f, bounds.getHeight() * 0.5f,
+                           0.0f, start, start + 4.3f, true);
+        g.setColour (juce::Colour (0xff7ee0a8));
+        g.strokePath (arc, juce::PathStrokeType (2.4f, juce::PathStrokeType::curved,
+                                                 juce::PathStrokeType::rounded));
+    }
+};
+
 PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
@@ -112,6 +130,11 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     reconnectButton.setButtonText (utf8 (u8"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043b\u0435\u043d\u0442\u0443"));
     reconnectButton.onClick = [this] { processorRef.reconnectLeds(); };
     addAndMakeVisible (reconnectButton);
+
+    connectSpinner = std::make_unique<ConnectSpinner>();
+    connectSpinner->setInterceptsMouseClicks (false, false);
+    connectSpinner->setVisible (false);
+    addAndMakeVisible (*connectSpinner);
 
     firstNoteLabel.setText (utf8 (u8"\u041f\u0435\u0440\u0432\u0430\u044f \u043d\u043e\u0442\u0430"), juce::dontSendNotification);
     firstNoteLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
@@ -184,12 +207,13 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     hintLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
     addAndMakeVisible (hintLabel);
 
-    startTimerHz (24);
+    startTimerHz (30);
 }
 
 PianoLEDAudioProcessorEditor::~PianoLEDAudioProcessorEditor()
 {
     layoutTable.setModel (nullptr);
+    processorRef.persistLayout();
     processorRef.stopStripTest();
     processorRef.setLayoutPreviewHold (false);
     processorRef.setLayoutPreviewNote (-1);
@@ -201,6 +225,8 @@ void PianoLEDAudioProcessorEditor::showLayout (bool on)
     statusLabel.setVisible (! on);
     connectionLabel.setVisible (! on);
     reconnectButton.setVisible (! on);
+    if (connectSpinner != nullptr)
+        connectSpinner->setVisible (! on && processorRef.isLedConnecting());
     testButton.setVisible (! on);
     layoutButton.setVisible (! on);
     backButton.setVisible (on);
@@ -225,7 +251,7 @@ void PianoLEDAudioProcessorEditor::showLayout (bool on)
         ignorePresetBox = true;
         processorRef.refreshPresetCombo (presetBox);
         ignorePresetBox = false;
-        presetNameEditor.setText (processorRef.getProgramName (processorRef.getCurrentProgram()),
+        presetNameEditor.setText (processorRef.getLayoutProgramName(),
                                   juce::dontSendNotification);
         savedStatusLabel.setText ({}, juce::dontSendNotification);
         syncLayoutControls();
@@ -236,6 +262,7 @@ void PianoLEDAudioProcessorEditor::showLayout (bool on)
     else
     {
         verifying = false;
+        processorRef.persistLayout();
         processorRef.setLayoutPreviewHold (false);
         processorRef.setLayoutPreviewNote (-1);
         setSize (520, 400);
@@ -279,8 +306,8 @@ void PianoLEDAudioProcessorEditor::loadSelectedPreset()
     if (ignorePresetBox) return;
     const int id = presetBox.getSelectedId();
     if (id <= 0) return;
-    processorRef.setCurrentProgram (id - 1);
-    presetNameEditor.setText (processorRef.getProgramName (id - 1), juce::dontSendNotification);
+    processorRef.setLayoutProgram (id - 1);
+    presetNameEditor.setText (processorRef.getLayoutProgramName(), juce::dontSendNotification);
     syncLayoutControls();
     layoutTable.updateContent();
     layoutTable.selectRow (0);
@@ -492,7 +519,13 @@ void PianoLEDAudioProcessorEditor::resized()
         bounds.removeFromTop (4);
         connectionLabel.setBounds (bounds.removeFromTop (32));
         bounds.removeFromTop (6);
-        reconnectButton.setBounds (bounds.removeFromTop (28).reduced (90, 0));
+        auto connectRow = bounds.removeFromTop (28).reduced (70, 0);
+        if (connectSpinner != nullptr)
+        {
+            connectSpinner->setBounds (connectRow.removeFromLeft (22).withSizeKeepingCentre (20, 20));
+            connectRow.removeFromLeft (8);
+        }
+        reconnectButton.setBounds (connectRow);
         bounds.removeFromTop (20);
     }
     else
@@ -560,17 +593,33 @@ void PianoLEDAudioProcessorEditor::timerCallback()
                                  juce::dontSendNotification);
         }
 
-        if (processorRef.isLedConnected())
+        if (processorRef.isLedConnecting())
         {
+            connectSpinner->setVisible (true);
+            connectSpinner->repaint();
+            reconnectButton.setEnabled (false);
+            reconnectButton.setButtonText (utf8 (u8"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u044e\u2026"));
+            connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xffd8c56a));
+            connectionLabel.setText (utf8 (u8"LED strip: \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u044e \u043b\u0435\u043d\u0442\u0443\u2026 \u043f\u043e\u0434\u043e\u0436\u0434\u0438"),
+                                     juce::dontSendNotification);
+        }
+        else if (processorRef.isLedConnected())
+        {
+            connectSpinner->setVisible (false);
+            reconnectButton.setEnabled (true);
+            reconnectButton.setButtonText (utf8 (u8"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043b\u0435\u043d\u0442\u0443"));
             connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
             connectionLabel.setText ("LED strip: " + processorRef.ledDevicePath() + "  |  1%",
                                      juce::dontSendNotification);
         }
         else
         {
+            connectSpinner->setVisible (false);
+            reconnectButton.setEnabled (true);
+            reconnectButton.setButtonText (utf8 (u8"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043b\u0435\u043d\u0442\u0443"));
             connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xffe08a7e));
             auto error = processorRef.ledLastError().trim();
-            juce::String text = utf8 (u8"LED strip: \u043f\u0435\u0440\u0435\u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u044e\u0441\u044c\u2026");
+            juce::String text = utf8 (u8"LED strip: \u043d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0430");
             if (error.isNotEmpty())
                 text += "  |  " + error.substring (0, 220);
             connectionLabel.setText (text, juce::dontSendNotification);
