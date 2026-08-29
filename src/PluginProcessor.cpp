@@ -16,6 +16,7 @@ PianoLEDAudioProcessor::PianoLEDAudioProcessor()
     ledBridge.start();
     loadPresetsFromDisk();
     ensureDefaultPreset();
+    ledBridge.setHistoryCapacity (historyCapacity);
 }
 
 PianoLEDAudioProcessor::~PianoLEDAudioProcessor()
@@ -117,9 +118,65 @@ void PianoLEDAudioProcessor::setKeySize (int keyIndex, int size)
     syncCurrentPreset();
 }
 
+void PianoLEDAudioProcessor::setLedStyle (piano_led::LedStyle style)
+{
+    ledBridge.setLedStyle (std::move (style));
+    syncCurrentPreset();
+}
+
+void PianoLEDAudioProcessor::setLedBrightness (float percent)
+{
+    auto style = ledBridge.ledStyle();
+    style.brightnessPercent = juce::jlimit (0.1f, 20.0f, percent);
+    setLedStyle (style);
+}
+
+void PianoLEDAudioProcessor::setLedHueSat (float hue, float saturation)
+{
+    auto style = ledBridge.ledStyle();
+    style.hue = hue;
+    style.saturation = juce::jlimit (0.0f, 1.0f, saturation);
+    setLedStyle (style);
+}
+
+void PianoLEDAudioProcessor::setHistoryCapacity (int n)
+{
+    historyCapacity = juce::jlimit (1, piano_led::NoteHistory::kMax, n);
+    if (recallCount > historyCapacity)
+        recallCount = historyCapacity;
+    ledBridge.setHistoryCapacity (historyCapacity);
+    syncCurrentPreset();
+}
+
+void PianoLEDAudioProcessor::setRecallCount (int m)
+{
+    recallCount = juce::jlimit (1, historyCapacity, m);
+    syncCurrentPreset();
+}
+
+void PianoLEDAudioProcessor::setChordWindowMs (int ms)
+{
+    chordWindowMs = juce::jlimit (5, 250, ms);
+    syncCurrentPreset();
+}
+
+void PianoLEDAudioProcessor::recallLastNotes()
+{
+    ledBridge.stopChase();
+    ledBridge.recallLastNotes (recallCount);
+}
+
+void PianoLEDAudioProcessor::recallLastChord()
+{
+    ledBridge.stopChase();
+    ledBridge.recallLastChord (chordWindowMs);
+}
+
 namespace
 {
-void writeLayoutXml (juce::XmlElement& el, const piano_led::StripLayout& layout)
+void writeLayoutXml (juce::XmlElement& el, const piano_led::StripLayout& layout,
+                     const piano_led::LedStyle& style, int historySize, int recallM,
+                     int chordMs)
 {
     el.setAttribute ("lowestNote", layout.lowestNote);
     el.setAttribute ("startLed", layout.startLed);
@@ -132,6 +189,12 @@ void writeLayoutXml (juce::XmlElement& el, const piano_led::StripLayout& layout)
         sizes += juce::String (layout.sizeForKey (i));
     }
     el.setAttribute ("sizes", sizes);
+    el.setAttribute ("brightness", style.brightnessPercent);
+    el.setAttribute ("hue", static_cast<double> (style.hue));
+    el.setAttribute ("sat", static_cast<double> (style.saturation));
+    el.setAttribute ("historySize", historySize);
+    el.setAttribute ("recallCount", recallM);
+    el.setAttribute ("chordWindowMs", chordMs);
 }
 
 piano_led::StripLayout readLayoutXml (const juce::XmlElement& el)
@@ -151,6 +214,32 @@ piano_led::StripLayout readLayoutXml (const juce::XmlElement& el)
     }
     return layout;
 }
+
+piano_led::LedStyle readStyleXml (const juce::XmlElement& el)
+{
+    piano_led::LedStyle style;
+    style.brightnessPercent = static_cast<float> (
+        juce::jlimit (0.1, 20.0, el.getDoubleAttribute ("brightness", 2.0)));
+    style.hue = static_cast<float> (el.getDoubleAttribute ("hue", 0.0));
+    style.saturation = static_cast<float> (juce::jlimit (0.0, 1.0, el.getDoubleAttribute ("sat", 1.0)));
+    return style;
+}
+
+int readHistorySizeXml (const juce::XmlElement& el)
+{
+    return juce::jlimit (1, piano_led::NoteHistory::kMax,
+                         el.getIntAttribute ("historySize", piano_led::NoteHistory::kDefaultCapacity));
+}
+
+int readRecallCountXml (const juce::XmlElement& el, int historySize)
+{
+    return juce::jlimit (1, historySize, el.getIntAttribute ("recallCount", 8));
+}
+
+int readChordWindowXml (const juce::XmlElement& el)
+{
+    return juce::jlimit (5, 250, el.getIntAttribute ("chordWindowMs", 50));
+}
 } // namespace
 
 void PianoLEDAudioProcessor::ensureDefaultPreset()
@@ -159,7 +248,8 @@ void PianoLEDAudioProcessor::ensureDefaultPreset()
     auto layout = ledBridge.layout();
     layout.makeSizesExplicit();
     ledBridge.setLayout (layout);
-    presets.push_back ({ "Default", std::move (layout) });
+    presets.push_back ({ "Default", std::move (layout), ledBridge.ledStyle(),
+                         historyCapacity, recallCount, chordWindowMs });
     currentProgram = 0;
 }
 
@@ -167,7 +257,13 @@ void PianoLEDAudioProcessor::applyPreset (int index)
 {
     if (index < 0 || index >= static_cast<int> (presets.size())) return;
     currentProgram = index;
-    ledBridge.setLayout (presets[static_cast<std::size_t> (index)].layout);
+    const auto& preset = presets[static_cast<std::size_t> (index)];
+    ledBridge.setLayout (preset.layout);
+    ledBridge.setLedStyle (preset.style);
+    historyCapacity = juce::jlimit (1, piano_led::NoteHistory::kMax, preset.historyCapacity);
+    recallCount = juce::jlimit (1, historyCapacity, preset.recallCount);
+    chordWindowMs = juce::jlimit (5, 250, preset.chordWindowMs);
+    ledBridge.setHistoryCapacity (historyCapacity);
 }
 
 void PianoLEDAudioProcessor::setLayoutProgram (int index)
@@ -198,6 +294,10 @@ void PianoLEDAudioProcessor::syncCurrentPreset()
     auto layout = ledBridge.layout();
     layout.makeSizesExplicit();
     presets[static_cast<std::size_t> (currentProgram)].layout = std::move (layout);
+    presets[static_cast<std::size_t> (currentProgram)].style = ledBridge.ledStyle();
+    presets[static_cast<std::size_t> (currentProgram)].historyCapacity = historyCapacity;
+    presets[static_cast<std::size_t> (currentProgram)].recallCount = recallCount;
+    presets[static_cast<std::size_t> (currentProgram)].chordWindowMs = chordWindowMs;
 }
 
 void PianoLEDAudioProcessor::notifyHostState()
@@ -221,12 +321,14 @@ void PianoLEDAudioProcessor::savePresetsToDisk()
     syncCurrentPreset();
     juce::XmlElement xml ("PianoLED");
     xml.setAttribute ("current", currentProgram);
-    writeLayoutXml (xml, ledBridge.layout());
+    writeLayoutXml (xml, ledBridge.layout(), ledBridge.ledStyle(), historyCapacity, recallCount,
+                    chordWindowMs);
     for (const auto& preset : presets)
     {
         auto* child = xml.createNewChildElement ("Preset");
         child->setAttribute ("name", preset.name);
-        writeLayoutXml (*child, preset.layout);
+        writeLayoutXml (*child, preset.layout, preset.style, preset.historyCapacity,
+                        preset.recallCount, preset.chordWindowMs);
     }
 
     for (auto file : presetStoreFiles())
@@ -247,6 +349,10 @@ bool PianoLEDAudioProcessor::applyStateXml (const juce::XmlElement& xml)
         LayoutPreset preset;
         preset.name = child->getStringAttribute ("name", "Layout");
         preset.layout = readLayoutXml (*child);
+        preset.style = readStyleXml (*child);
+        preset.historyCapacity = readHistorySizeXml (*child);
+        preset.recallCount = readRecallCountXml (*child, preset.historyCapacity);
+        preset.chordWindowMs = readChordWindowXml (*child);
         loaded.push_back (std::move (preset));
     }
 
@@ -255,6 +361,10 @@ bool PianoLEDAudioProcessor::applyStateXml (const juce::XmlElement& xml)
         LayoutPreset preset;
         preset.name = "Default";
         preset.layout = readLayoutXml (xml);
+        preset.style = readStyleXml (xml);
+        preset.historyCapacity = readHistorySizeXml (xml);
+        preset.recallCount = readRecallCountXml (xml, preset.historyCapacity);
+        preset.chordWindowMs = readChordWindowXml (xml);
         loaded.push_back (std::move (preset));
     }
 
@@ -300,6 +410,7 @@ juce::String PianoLEDAudioProcessor::saveLayoutPreset (const juce::String& reque
     auto layout = ledBridge.layout();
     layout.makeSizesExplicit();
     ledBridge.setLayout (layout);
+    const auto style = ledBridge.ledStyle();
 
     auto name = requestedName.trim();
     if (name.isEmpty()) name = presets[static_cast<std::size_t> (currentProgram)].name;
@@ -312,11 +423,15 @@ juce::String PianoLEDAudioProcessor::saveLayoutPreset (const juce::String& reque
     if (found >= 0)
     {
         presets[static_cast<std::size_t> (found)].layout = layout;
+        presets[static_cast<std::size_t> (found)].style = style;
+        presets[static_cast<std::size_t> (found)].historyCapacity = historyCapacity;
+        presets[static_cast<std::size_t> (found)].recallCount = recallCount;
+        presets[static_cast<std::size_t> (found)].chordWindowMs = chordWindowMs;
         currentProgram = found;
     }
     else
     {
-        presets.push_back ({ name, layout });
+        presets.push_back ({ name, layout, style, historyCapacity, recallCount, chordWindowMs });
         currentProgram = static_cast<int> (presets.size()) - 1;
     }
 
@@ -342,12 +457,14 @@ void PianoLEDAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     syncCurrentPreset();
     juce::XmlElement xml ("PianoLED");
     xml.setAttribute ("current", currentProgram);
-    writeLayoutXml (xml, ledBridge.layout());
+    writeLayoutXml (xml, ledBridge.layout(), ledBridge.ledStyle(), historyCapacity, recallCount,
+                    chordWindowMs);
     for (const auto& preset : presets)
     {
         auto* child = xml.createNewChildElement ("Preset");
         child->setAttribute ("name", preset.name);
-        writeLayoutXml (*child, preset.layout);
+        writeLayoutXml (*child, preset.layout, preset.style, preset.historyCapacity,
+                        preset.recallCount, preset.chordWindowMs);
     }
     copyXmlToBinary (xml, destData);
 }

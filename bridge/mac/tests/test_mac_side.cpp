@@ -18,6 +18,7 @@
 #include "piano_led/bridge.h"
 #include "piano_led/frame_builder.h"
 #include "piano_led/note_bitmask.h"
+#include "piano_led/note_history.h"
 #include "test_framework.h"
 
 /* ══════════════════ счётчик аллокаций ══════════════════
@@ -214,6 +215,18 @@ void test_bridge_note_calls_do_not_allocate() {
     });
 
     check_eq(allocations, 0L, "вызовы моста из аудио-потока не аллоцируют");
+}
+
+void test_note_history_push_does_not_allocate() {
+    begin_test("АУДИО-ПОТОК — NoteHistory::push не аллоцирует");
+
+    NoteHistory history;
+    history.push(60);
+
+    const long allocations = countAllocations([&] {
+        for (int i = 0; i < 10000; ++i) history.push(36 + (i % 48));
+    });
+    check_eq(allocations, 0L, "история note-on не аллоцирует");
 }
 
 void test_frame_build_does_not_allocate() {
@@ -473,24 +486,148 @@ void test_current_estimate() {
 
 /* ══════════════════════ LedBridge без железа ══════════════════════ */
 
-void test_brightness_is_fixed_at_one_percent() {
-    begin_test("Яркость — всегда 1%, без вариантов");
+void test_led_style_default_is_two_percent_red() {
+    begin_test("Стиль по умолчанию — красный 2%");
 
-    /* 1% от 255 = 2.55, округлено к 3. */
-    check_eq(int(kNoteColor.r), 3, "красный канал равен 3/255 — это 1%");
-    check_eq(int(kNoteColor.g), 0, "зелёный канал нулевой");
-    check_eq(int(kNoteColor.b), 0, "синий канал нулевой");
+    const Rgb rgb = LedStyle{}.toRgb();
+    check_eq(int(rgb.r), 5, "красный канал 5/255 — это 2%");
+    check_eq(int(rgb.g), 0, "зелёный канал нулевой");
+    check_eq(int(rgb.b), 0, "синий канал нулевой");
+    check_eq(int(kNoteColor.r), 5, "kNoteColor совпадает с умолчанием");
 
-    /* Мост обязан использовать именно её, а не свою копию. Проверяем по кадру:
-     * это единственный наблюдаемый результат, раз сеттеров цвета больше нет. */
+    LedStyle green;
+    green.hue = 120.0f;
+    const Rgb g = green.toRgb();
+    check_eq(int(g.r), 0, "зелёный оттенок: красный гаснет");
+    check_eq(int(g.g), 5, "зелёный оттенок: зелёный канал 2%");
+    check_eq(int(g.b), 0, "зелёный оттенок: синий гаснет");
+
+    LedStyle white;
+    white.saturation = 0.0f;
+    white.brightnessPercent = 2;
+    const Rgb w = white.toRgb();
+    check_eq(int(w.r), 5, "белый: красный 2%");
+    check_eq(int(w.g), 5, "белый: зелёный 2%");
+    check_eq(int(w.b), 5, "белый: синий 2%");
+
+    LedStyle dim;
+    dim.brightnessPercent = 0.1f;
+    const Rgb d = dim.toRgb();
+    check_eq(int(d.r), 1, "0.1% — минимум диода, канал 1/255");
+    check_eq(int(d.g), 0, "тусклый красный без зелёного");
+    check_eq(int(d.b), 0, "тусклый красный без синего");
+}
+
+void test_bridge_uses_style_and_fill() {
+    begin_test("LedBridge — стиль и заливка настроек сразу в кадре");
+
+    LedBridge bridge(StripLayout{});
+    bridge.noteOn(60);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 5, "нота зажглась на 2%");
+
+    LedStyle blue;
+    blue.hue = 240.0f;
+    blue.brightnessPercent = 2;
+    bridge.setStyle(blue);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 0, "после смены цвета красный гаснет");
+    check_eq(int(bridge.lastFrame()[72 * 3 + 2]), 5, "синий канал 2%");
+
+    bridge.setFillPreview(true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("67,68,69,70,71,72,73,74,75,76"),
+             "превью — 10 диодов посередине, не вся лента");
+    check_eq(int(bridge.lastFrame()[0]), 0, "край ленты погашен");
+    check_eq(int(bridge.lastFrame()[67 * 3 + 2]), 5, "середина горит синим 2%");
+    check_eq(int(bridge.lastFrame()[(144 * 3 - 1)]), 0, "другой край тоже погашен");
+
+    bridge.setFillPreview(false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"),
+             "после заливки снова горит только нота");
+}
+
+void test_note_history_window_and_recall() {
+    begin_test("История нот — окно N и последние M");
+
+    NoteHistory history;
+    history.setCapacity(4);
+    history.push(60);
+    history.push(64);
+    history.push(67);
+    history.push(71);
+    history.push(72);  // пятая; при N=4 нота 60 уже за окном
+
+    check_eq(history.size(), 4, "окно N=4, пятая нота вытеснила первую из вида");
+    const auto four = history.asSnapshot(4);
+    check(four.isOn(64) && four.isOn(67) && four.isOn(71) && four.isOn(72),
+          "последние 4 высоты на месте");
+    check(!four.isOn(60), "первая нота уже за окном N");
+
+    const auto two = history.asSnapshot(2);
+    check(two.isOn(71) && two.isOn(72), "M=2 — две последние");
+    check(!two.isOn(64) && !two.isOn(67), "более ранние не входят в M");
+}
+
+void test_note_history_last_chord_by_time() {
+    begin_test("История — последний аккорд по окну времени");
+
+    NoteHistory history;
+    history.pushAt(60, 1000);
+    history.pushAt(64, 1010);
+    history.pushAt(67, 1020);
+    history.pushAt(72, 2000);
+    history.pushAt(76, 2015);
+
+    const auto chord = history.lastChordSnapshot(50);
+    check(chord.isOn(72) && chord.isOn(76), "последний аккорд — две ноты рядом");
+    check(!chord.isOn(60) && !chord.isOn(64) && !chord.isOn(67),
+          "предыдущий аккорд не попал: пауза больше окна");
+
+    const auto wide = history.lastChordSnapshot(2000);
+    check(wide.isOn(60) && wide.isOn(76), "большое окно склеивает всё в один аккорд");
+
+    history.pushAt(48, 5000);
+    const auto single = history.lastChordSnapshot(40);
+    check(single.isOn(48) && single.count() == 1, "одиночная нота — аккорд из одной");
+}
+
+void test_bridge_history_preview_lights_notes() {
+    begin_test("LedBridge — превью последних нот зажигает пачку");
+
+    LedBridge bridge(StripLayout{});
+    NoteBitmask::Snapshot chord;
+    chord.setOn(60);
+    chord.setOn(64);
+    chord.setOn(67);
+    bridge.setHistoryPreview(chord, true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74,84,85,86,93,94,95"),
+             "C-E-G зажглись как при игре аккорда");
+
+    bridge.setHistoryPreview({}, false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string(""), "после превью лента погасла");
+}
+
+void test_brightness_is_user_controlled() {
+    begin_test("Яркость задаётся стилем, по умолчанию 2%");
+
     LedBridge bridge(StripLayout{});
     bridge.noteOn(60);
     bridge.tick();
 
     const std::vector<std::uint8_t>& frame = bridge.lastFrame();
-    check_eq(int(frame[72 * 3 + 0]), 3, "мост зажёг светодиод на 3/255");
+    check_eq(int(frame[72 * 3 + 0]), 5, "мост зажёг светодиод на 5/255");
     check_eq(int(frame[72 * 3 + 1]), 0, "зелёный не зажёгся");
     check_eq(int(frame[72 * 3 + 2]), 0, "синий не зажёгся");
+
+    LedStyle brighter;
+    brighter.brightnessPercent = 10;
+    bridge.setStyle(brighter);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 26, "10% — пик канала 26");
 }
 
 void test_brightness_stays_within_budget() {
@@ -502,7 +639,7 @@ void test_brightness_stays_within_budget() {
     builder.build(notes.snapshot(), kNoteColor);
 
     const double current = builder.estimatedCurrentMa();
-    check(current < 150.0, "вся лента на 1% берёт " +
+    check(current < 150.0, "вся лента на 2% берёт " +
                                std::to_string(static_cast<int>(current)) +
                                " мА — в пределах бюджета 150 мА");
 }
@@ -555,6 +692,7 @@ int main() {
     test_allocation_detector_works();
     test_realtime_path_does_not_allocate();
     test_bridge_note_calls_do_not_allocate();
+    test_note_history_push_does_not_allocate();
     test_frame_build_does_not_allocate();
 
     test_layout_math();
@@ -571,7 +709,12 @@ int main() {
 
     test_current_estimate();
 
-    test_brightness_is_fixed_at_one_percent();
+    test_led_style_default_is_two_percent_red();
+    test_bridge_uses_style_and_fill();
+    test_note_history_window_and_recall();
+    test_note_history_last_chord_by_time();
+    test_bridge_history_preview_lights_notes();
+    test_brightness_is_user_controlled();
     test_brightness_stays_within_budget();
 
     test_bridge_without_port();

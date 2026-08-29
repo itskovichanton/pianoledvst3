@@ -71,42 +71,42 @@ void test_current_estimate() {
               std::to_string(halfMa) + ")");
 }
 
-void test_channel_cap_at_one_percent() {
-    begin_test("Защита — канал не выше 1% независимо от хоста");
+void test_channel_cap_at_twenty_percent() {
+    begin_test("Защита — канал не выше 20% независимо от хоста");
 
     std::vector<std::uint8_t> one = makeFrame(1, 255, 128, 40);
     led_guard_clamp_channels(one.data(), one.size(), LED_GUARD_MAX_CHANNEL);
-    check_eq(int(one[0]), int(LED_GUARD_MAX_CHANNEL), "красный обрезан до 3");
-    check_eq(int(one[1]), int(LED_GUARD_MAX_CHANNEL), "зелёный обрезан до 3");
-    check_eq(int(one[2]), int(LED_GUARD_MAX_CHANNEL), "синий обрезан до 3");
+    check_eq(int(one[0]), int(LED_GUARD_MAX_CHANNEL), "красный обрезан до 51");
+    check_eq(int(one[1]), int(LED_GUARD_MAX_CHANNEL), "зелёный обрезан до 51");
+    check_eq(int(one[2]), 40, "синий ниже потолка не тронут");
     check_eq(int(one[3]), 0, "соседний светодиод не зажёгся");
 
-    std::vector<std::uint8_t> dim = makeFrame(4, 3, 0, 0);
+    std::vector<std::uint8_t> dim = makeFrame(4, 5, 0, 0);
     led_guard_clamp_channels(dim.data(), dim.size(), LED_GUARD_MAX_CHANNEL);
-    check_eq(int(dim[0]), 3, "рабочий кадр плагина не меняется");
+    check_eq(int(dim[0]), 5, "рабочий кадр плагина на 2% не меняется");
 
     led_guard_clamp_channels(nullptr, 100, LED_GUARD_MAX_CHANNEL);
 }
 
-void test_one_percent_is_safe() {
-    begin_test("Защита по току — рабочий режим 1%");
+void test_two_percent_is_safe() {
+    begin_test("Защита по току — рабочий режим 2%");
 
-    /* Ровно тот кадр, который будет слать плагин: 1% красного.
+    /* Кадр плагина по умолчанию: 2% красного.
      * Даже если разом зажечь всю ленту, лимит не должен быть даже близко. */
-    std::vector<std::uint8_t> full = makeFrame(kLedCount, 3, 0, 0);
+    std::vector<std::uint8_t> full = makeFrame(kLedCount, 5, 0, 0);
     const double ma = toMa(led_guard_estimate_ua(full.data(), full.size()));
 
-    check(ma < 50.0, "вся лента на 1% берёт " + std::to_string(static_cast<int>(ma)) +
-                         " мА — меньше 50");
+    check(ma < 80.0, "вся лента на 2% берёт " + std::to_string(static_cast<int>(ma)) +
+                         " мА — меньше 80");
 
     const int clamped = led_guard_apply(full.data(), full.size(), 150u);
     check_eq(clamped, 0, "притушивать не пришлось");
-    check_eq(int(full[0]), 3, "яркость осталась ровно такой, какую задал хост");
+    check_eq(int(full[0]), 5, "яркость осталась ровно такой, какую задал хост");
 
     /* Десять пальцев по три светодиода — типичный аккорд. */
-    std::vector<std::uint8_t> chord = makeFrame(30, 3, 0, 0);
+    std::vector<std::uint8_t> chord = makeFrame(30, 5, 0, 0);
     const double chordMa = toMa(led_guard_estimate_ua(chord.data(), chord.size()));
-    check(chordMa < 10.0, "аккорд из десяти клавиш — около " +
+    check(chordMa < 15.0, "аккорд из десяти клавиш — около " +
                               std::to_string(chordMa) + " мА");
 }
 
@@ -214,7 +214,7 @@ void test_firmware_accepts_host_frame() {
 
     /* Собираем кадр ровно так, как это делает LedBridge, и скармливаем
      * декодеру ровно так, как это делает главный цикл прошивки. */
-    const std::vector<std::uint8_t> pixels = makeFrame(1, 3, 0, 0);
+    const std::vector<std::uint8_t> pixels = makeFrame(1, 5, 0, 0);
 
     std::vector<std::uint8_t> wire(led_proto_encoded_size(
         static_cast<std::uint16_t>(pixels.size())));
@@ -235,7 +235,7 @@ void test_firmware_accepts_host_frame() {
     check_eq(int(decoder.type), int(LED_FRAME_PIXELS), "тип PIXELS");
     check_eq(decoder.length, std::uint16_t{kFrameBytes}, "длина 432 байта");
     check_eq(decoder.length % 3u, 0u, "длина кратна 3 — проверка прошивки пройдена");
-    check_eq(int(decoder.payload[0]), 3, "яркость 1% доехала");
+    check_eq(int(decoder.payload[0]), 5, "яркость 2% доехала");
 }
 
 void test_firmware_rejects_misaligned_length() {
@@ -320,8 +320,8 @@ int main() {
     std::cout << "Тесты логики прошивки (те же .c, что уедут на плату)\n";
 
     test_current_estimate();
-    test_channel_cap_at_one_percent();
-    test_one_percent_is_safe();
+    test_channel_cap_at_twenty_percent();
+    test_two_percent_is_safe();
     test_clamps_over_budget();
     test_clamp_preserves_color_ratio();
     test_clamp_boundary();

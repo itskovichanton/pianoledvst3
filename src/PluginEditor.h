@@ -2,11 +2,13 @@
 
 #include "PluginProcessor.h"
 
+#include <juce_gui_extra/juce_gui_extra.h>
 #include <memory>
 
 class PianoLEDAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                            private juce::Timer,
-                                           private juce::TableListBoxModel
+                                           private juce::TableListBoxModel,
+                                           private juce::ChangeListener
 {
 public:
     explicit PianoLEDAudioProcessorEditor (PianoLEDAudioProcessor&);
@@ -18,18 +20,32 @@ public:
     void setKeySizeFromCell (int row, int size);
 
 private:
+    enum class Page { play, layout, settings, specials };
+
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void drawStrip (juce::Graphics&);
     void drawKeyboard (juce::Graphics&);
-    void showLayout (bool on);
+    void showPage (Page next);
+    void leaveCurrentPage();
     void syncLayoutControls();
+    void syncSettingsControls();
+    void syncSpecialsControls();
     void applyFirstNote();
     void applyStartLed();
     void applyKeyCount();
+    void applyBrightness();
+    void applyHistoryCapacity();
+    void applyRecallCount();
+    void applyChordWindow();
+    void recallLastNotes();
+    void recallLastChord();
     void savePreset();
     void loadSelectedPreset();
     void startVerifyPlayback();
     void tickVerifyPlayback();
+    juce::Colour accentColour() const;
+    void updateStatusLabel();
 
     int getNumRows() override;
     void paintRowBackground (juce::Graphics&, int rowNumber, int width, int height,
@@ -48,6 +64,8 @@ private:
     std::unique_ptr<juce::Component> connectSpinner;
     juce::TextButton testButton;
     juce::TextButton layoutButton;
+    juce::TextButton settingsButton;
+    juce::TextButton specialsButton;
     juce::TextButton backButton;
     juce::Label hintLabel;
 
@@ -63,11 +81,30 @@ private:
     juce::Label savedStatusLabel;
     juce::TableListBox layoutTable;
 
+    juce::Label brightnessLabel;
+    juce::Slider brightnessSlider;
+    juce::Label colourLabel;
+    juce::ColourSelector colourSelector { juce::ColourSelector::showColourAtTop
+                                              | juce::ColourSelector::showColourspace
+                                              | juce::ColourSelector::showSliders,
+                                          4, 7 };
+
+    juce::Label historySizeLabel;
+    juce::Slider historySizeSlider;
+    juce::Label recallCountLabel;
+    juce::Slider recallCountSlider;
+    juce::TextButton recallButton;
+    juce::Label chordWindowLabel;
+    juce::Slider chordWindowSlider;
+    juce::TextButton chordButton;
+
     juce::Rectangle<int> stripBounds;
     juce::Rectangle<int> keyboardBounds;
-    bool layoutMode = false;
+    Page page = Page::play;
     bool verifying = false;
     bool ignorePresetBox = false;
+    bool ignoreColour = false;
+    bool lastRecallWasChord = false;
     juce::int64 verifyStartMs = 0;
     int verifyKey = -1;
 

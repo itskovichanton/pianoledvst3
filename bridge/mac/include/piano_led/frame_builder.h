@@ -25,6 +25,18 @@ struct Rgb {
 };
 
 /**
+ * Внешний вид ленты: яркость в процентах и цвет (HSV).
+ * toRgb() даёт каналы, которые уходят в кадр.
+ */
+struct LedStyle {
+    float brightnessPercent = 2.0f; ///< 0.1…20, по умолчанию 2%. Ниже ~0.4% всё равно 1/255 — пол диода.
+    float hue = 0.0f;               ///< 0…360
+    float saturation = 1.0f;        ///< 0…1, 0 = белый
+
+    Rgb toRgb() const;
+};
+
+/**
  * Геометрия установки: как ноты ложатся на ленту.
  *
  * Базовый случай — равномерный: (нота - lowestNote) * ledsPerKey + startLed.
@@ -131,6 +143,12 @@ public:
 
     /** Зажигает один светодиод по индексу ленты (0 … ledCount-1). */
     void lightLed(int index, Rgb color);
+
+    /**
+     * Зажигает count диодов в середине ленты — превью цвета в «Настройках».
+     * Не всю ленту: так меньше ток, а оттенок и яркость всё равно видны.
+     */
+    void lightCenter(int count, Rgb color);
 
     /** Готовый кадр: ledCount * 3 байта в порядке R, G, B. */
     const std::vector<std::uint8_t>& frame() const { return frame_; }

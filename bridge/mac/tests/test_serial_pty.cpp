@@ -242,7 +242,7 @@ void test_bridge_sends_pixels() {
         check_eq(frame.payload.size(), std::size_t{432}, "144 светодиода * 3 байта");
         check_eq(litLeds(frame.payload), std::string("72,73,74"),
                  "у прошивки горят ровно те диоды, что задумал плагин");
-        check_eq(int(frame.payload[72 * 3]), 3, "яркость 1% доехала без искажений");
+        check_eq(int(frame.payload[72 * 3]), 5, "яркость 2% доехала без искажений");
     }
 
     pty.closeDevice();

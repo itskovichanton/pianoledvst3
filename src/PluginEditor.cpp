@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace
 {
@@ -40,6 +41,18 @@ juce::String chordTextFromSnapshot (const piano_led::NoteBitmask::Snapshot& snap
 juce::String utf8 (const char* text)
 {
     return juce::String::fromUTF8 (text);
+}
+
+/** Каналы ленты на 2% почти чёрные на экране — растягиваем к полной яркости,
+ *  сохраняя оттенок, чтобы превью в плагине было читаемым. */
+juce::Colour visibleLedColour (std::uint8_t r, std::uint8_t g, std::uint8_t b)
+{
+    const int peak = std::max ({ static_cast<int> (r), static_cast<int> (g), static_cast<int> (b) });
+    if (peak <= 0)
+        return juce::Colour (0xff1a1e28);
+    return juce::Colour (static_cast<juce::uint8> (r * 255 / peak),
+                         static_cast<juce::uint8> (g * 255 / peak),
+                         static_cast<juce::uint8> (b * 255 / peak));
 }
 } // namespace
 
@@ -107,11 +120,19 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     addAndMakeVisible (testButton);
 
     layoutButton.setButtonText (utf8 (u8"\u0420\u0430\u0441\u043a\u043b\u0430\u0434\u043a\u0430"));
-    layoutButton.onClick = [this] { showLayout (true); };
+    layoutButton.onClick = [this] { showPage (Page::layout); };
     addAndMakeVisible (layoutButton);
 
+    settingsButton.setButtonText (utf8 (u8"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"));
+    settingsButton.onClick = [this] { showPage (Page::settings); };
+    addAndMakeVisible (settingsButton);
+
+    specialsButton.setButtonText (utf8 (u8"\u0421\u043f\u0435\u0446\u0438\u0430\u043b\u044c\u043d\u044b\u0435 \u0444\u0443\u043d\u043a\u0446\u0438\u0438"));
+    specialsButton.onClick = [this] { showPage (Page::specials); };
+    addAndMakeVisible (specialsButton);
+
     backButton.setButtonText (utf8 (u8"\u041d\u0430\u0437\u0430\u0434"));
-    backButton.onClick = [this] { showLayout (false); };
+    backButton.onClick = [this] { showPage (Page::play); };
     backButton.setVisible (false);
     addAndMakeVisible (backButton);
 
@@ -201,6 +222,78 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     layoutTable.setVisible (false);
     addAndMakeVisible (layoutTable);
 
+    brightnessLabel.setText (utf8 (u8"\u042f\u0440\u043a\u043e\u0441\u0442\u044c"), juce::dontSendNotification);
+    brightnessLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    brightnessLabel.setVisible (false);
+    addAndMakeVisible (brightnessLabel);
+
+    brightnessSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    brightnessSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 58, 20);
+    brightnessSlider.setRange (0.1, 20.0, 0.1);
+    brightnessSlider.setTextValueSuffix (" %");
+    brightnessSlider.onValueChange = [this] { applyBrightness(); };
+    brightnessSlider.setVisible (false);
+    addAndMakeVisible (brightnessSlider);
+
+    colourLabel.setText (utf8 (u8"\u0426\u0432\u0435\u0442 \u0441\u0432\u0435\u0442\u043e\u0434\u0438\u043e\u0434\u043e\u0432"), juce::dontSendNotification);
+    colourLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    colourLabel.setVisible (false);
+    addAndMakeVisible (colourLabel);
+
+    colourSelector.setColour (juce::ColourSelector::backgroundColourId, juce::Colour (0xff161820));
+    colourSelector.setOpaque (true);
+    colourSelector.setVisible (false);
+    colourSelector.addChangeListener (this);
+    addAndMakeVisible (colourSelector);
+
+    historySizeLabel.setText (utf8 (u8"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043d\u043e\u0442 (N)"), juce::dontSendNotification);
+    historySizeLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    historySizeLabel.setVisible (false);
+    addAndMakeVisible (historySizeLabel);
+
+    historySizeSlider.setSliderStyle (juce::Slider::IncDecButtons);
+    historySizeSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 44, 18);
+    historySizeSlider.setRange (1.0, static_cast<double> (piano_led::NoteHistory::kMax), 1.0);
+    historySizeSlider.onValueChange = [this] { applyHistoryCapacity(); };
+    historySizeSlider.setVisible (false);
+    addAndMakeVisible (historySizeSlider);
+
+    recallCountLabel.setText ("M", juce::dontSendNotification);
+    recallCountLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    recallCountLabel.setJustificationType (juce::Justification::centred);
+    recallCountLabel.setVisible (false);
+    addAndMakeVisible (recallCountLabel);
+
+    recallCountSlider.setSliderStyle (juce::Slider::IncDecButtons);
+    recallCountSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 44, 18);
+    recallCountSlider.setRange (1.0, 30.0, 1.0);
+    recallCountSlider.onValueChange = [this] { applyRecallCount(); };
+    recallCountSlider.setVisible (false);
+    addAndMakeVisible (recallCountSlider);
+
+    recallButton.setButtonText (utf8 (u8"\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u043d\u043e\u0442\u044b"));
+    recallButton.onClick = [this] { recallLastNotes(); };
+    recallButton.setVisible (false);
+    addAndMakeVisible (recallButton);
+
+    chordWindowLabel.setText (utf8 (u8"\u041e\u043a\u043d\u043e \u0430\u043a\u043a\u043e\u0440\u0434\u0430, \u043c\u0441"), juce::dontSendNotification);
+    chordWindowLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    chordWindowLabel.setVisible (false);
+    addAndMakeVisible (chordWindowLabel);
+
+    chordWindowSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    chordWindowSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 20);
+    chordWindowSlider.setRange (5.0, 250.0, 5.0);
+    chordWindowSlider.setTextValueSuffix (" ms");
+    chordWindowSlider.onValueChange = [this] { applyChordWindow(); };
+    chordWindowSlider.setVisible (false);
+    addAndMakeVisible (chordWindowSlider);
+
+    chordButton.setButtonText (utf8 (u8"\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u0430\u043a\u043a\u043e\u0440\u0434"));
+    chordButton.onClick = [this] { recallLastChord(); };
+    chordButton.setVisible (false);
+    addAndMakeVisible (chordButton);
+
     hintLabel.setText ("3 LEDs per key  |  48 keys  |  C2-B5", juce::dontSendNotification);
     hintLabel.setFont (juce::FontOptions (13.0f));
     hintLabel.setJustificationType (juce::Justification::centred);
@@ -208,63 +301,127 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     addAndMakeVisible (hintLabel);
 
     startTimerHz (30);
+    syncSpecialsControls();
 }
 
 PianoLEDAudioProcessorEditor::~PianoLEDAudioProcessorEditor()
 {
+    colourSelector.removeChangeListener (this);
     layoutTable.setModel (nullptr);
+    leaveCurrentPage();
     processorRef.persistLayout();
     processorRef.stopStripTest();
-    processorRef.setLayoutPreviewHold (false);
-    processorRef.setLayoutPreviewNote (-1);
 }
 
-void PianoLEDAudioProcessorEditor::showLayout (bool on)
+void PianoLEDAudioProcessorEditor::leaveCurrentPage()
 {
-    layoutMode = on;
-    statusLabel.setVisible (! on);
-    connectionLabel.setVisible (! on);
-    reconnectButton.setVisible (! on);
-    if (connectSpinner != nullptr)
-        connectSpinner->setVisible (! on && processorRef.isLedConnecting());
-    testButton.setVisible (! on);
-    layoutButton.setVisible (! on);
-    backButton.setVisible (on);
-    firstNoteLabel.setVisible (on);
-    firstNoteBox.setVisible (on);
-    startLedLabel.setVisible (on);
-    startLedSlider.setVisible (on);
-    keyCountLabel.setVisible (on);
-    keyCountSlider.setVisible (on);
-    presetBox.setVisible (on);
-    presetNameEditor.setVisible (on);
-    saveButton.setVisible (on);
-    savedStatusLabel.setVisible (on);
-    layoutTable.setVisible (on);
+    processorRef.clearHistoryPreview();
+    if (page == Page::layout)
+    {
+        verifying = false;
+        processorRef.setLayoutPreviewHold (false);
+        processorRef.setLayoutPreviewNote (-1);
+        processorRef.persistLayout();
+    }
+    else if (page == Page::settings)
+    {
+        processorRef.setSettingsFillPreview (false);
+        processorRef.persistLayout();
+    }
+    else if (page == Page::specials)
+    {
+        processorRef.persistLayout();
+    }
+}
 
-    if (on)
+void PianoLEDAudioProcessorEditor::showPage (Page next)
+{
+    if (page != next)
+        leaveCurrentPage();
+
+    page = next;
+    const bool play = page == Page::play;
+    const bool layout = page == Page::layout;
+    const bool settings = page == Page::settings;
+    const bool specials = page == Page::specials;
+
+    titleLabel.setText (specials ? utf8 (u8"\u0421\u043f\u0435\u0446. \u0444\u0443\u043d\u043a\u0446\u0438\u0438") : "PianoLED",
+                        juce::dontSendNotification);
+
+    statusLabel.setVisible (play || specials);
+    connectionLabel.setVisible (play);
+    reconnectButton.setVisible (play);
+    if (connectSpinner != nullptr)
+        connectSpinner->setVisible (play && processorRef.isLedConnecting());
+    testButton.setVisible (play);
+    layoutButton.setVisible (play);
+    settingsButton.setVisible (play);
+    specialsButton.setVisible (play);
+    backButton.setVisible (! play);
+
+    firstNoteLabel.setVisible (layout);
+    firstNoteBox.setVisible (layout);
+    startLedLabel.setVisible (layout);
+    startLedSlider.setVisible (layout);
+    keyCountLabel.setVisible (layout);
+    keyCountSlider.setVisible (layout);
+    layoutTable.setVisible (layout);
+
+    brightnessLabel.setVisible (settings);
+    brightnessSlider.setVisible (settings);
+    colourLabel.setVisible (settings);
+    colourSelector.setVisible (settings);
+
+    historySizeLabel.setVisible (specials);
+    historySizeSlider.setVisible (specials);
+    recallCountLabel.setVisible (specials);
+    recallCountSlider.setVisible (specials);
+    recallButton.setVisible (specials);
+    chordWindowLabel.setVisible (specials);
+    chordWindowSlider.setVisible (specials);
+    chordButton.setVisible (specials);
+
+    const bool editorPage = layout || settings;
+    presetBox.setVisible (editorPage);
+    presetNameEditor.setVisible (editorPage);
+    saveButton.setVisible (editorPage);
+    savedStatusLabel.setVisible (editorPage);
+
+    if (layout || settings)
     {
         processorRef.stopStripTest();
-        auto layout = processorRef.ledLayout();
-        layout.makeSizesExplicit();
-        processorRef.commitLayout (layout);
         ignorePresetBox = true;
         processorRef.refreshPresetCombo (presetBox);
         ignorePresetBox = false;
         presetNameEditor.setText (processorRef.getLayoutProgramName(),
                                   juce::dontSendNotification);
         savedStatusLabel.setText ({}, juce::dontSendNotification);
+        setSize (520, 620);
+    }
+
+    if (layout)
+    {
+        auto layoutCopy = processorRef.ledLayout();
+        layoutCopy.makeSizesExplicit();
+        processorRef.commitLayout (layoutCopy);
         syncLayoutControls();
         layoutTable.updateContent();
         layoutTable.selectRow (0);
-        setSize (520, 620);
+    }
+    else if (settings)
+    {
+        processorRef.setSettingsFillPreview (true);
+        syncSettingsControls();
+    }
+    else if (specials)
+    {
+        processorRef.stopStripTest();
+        syncSpecialsControls();
+        setSize (520, 500);
     }
     else
     {
         verifying = false;
-        processorRef.persistLayout();
-        processorRef.setLayoutPreviewHold (false);
-        processorRef.setLayoutPreviewNote (-1);
         setSize (520, 400);
     }
 
@@ -278,6 +435,122 @@ void PianoLEDAudioProcessorEditor::syncLayoutControls()
     startLedSlider.setRange (0.0, std::max (0.0, static_cast<double> (layout.ledCount - 1)), 1.0);
     startLedSlider.setValue (layout.startLed, juce::dontSendNotification);
     keyCountSlider.setValue (layout.keyCount(), juce::dontSendNotification);
+}
+
+void PianoLEDAudioProcessorEditor::syncSettingsControls()
+{
+    ignoreColour = true;
+    const auto& style = processorRef.ledStyle();
+    brightnessSlider.setValue (style.brightnessPercent, juce::dontSendNotification);
+    float hue = style.hue;
+    while (hue < 0.0f) hue += 360.0f;
+    while (hue >= 360.0f) hue -= 360.0f;
+    colourSelector.setCurrentColour (juce::Colour::fromHSV (hue / 360.0f, style.saturation, 1.0f, 1.0f),
+                                     juce::dontSendNotification);
+    ignoreColour = false;
+}
+
+void PianoLEDAudioProcessorEditor::syncSpecialsControls()
+{
+    historySizeSlider.setValue (processorRef.getHistoryCapacity(), juce::dontSendNotification);
+    const int n = std::max (1, processorRef.getHistoryCapacity());
+    recallCountSlider.setRange (1.0, static_cast<double> (n), 1.0);
+    recallCountSlider.setValue (processorRef.getRecallCount(), juce::dontSendNotification);
+    chordWindowSlider.setValue (processorRef.getChordWindowMs(), juce::dontSendNotification);
+}
+
+void PianoLEDAudioProcessorEditor::applyHistoryCapacity()
+{
+    processorRef.setHistoryCapacity (static_cast<int> (historySizeSlider.getValue()));
+    syncSpecialsControls();
+}
+
+void PianoLEDAudioProcessorEditor::applyRecallCount()
+{
+    processorRef.setRecallCount (static_cast<int> (recallCountSlider.getValue()));
+}
+
+void PianoLEDAudioProcessorEditor::applyChordWindow()
+{
+    processorRef.setChordWindowMs (static_cast<int> (chordWindowSlider.getValue()));
+}
+
+void PianoLEDAudioProcessorEditor::recallLastNotes()
+{
+    lastRecallWasChord = false;
+    processorRef.recallLastNotes();
+}
+
+void PianoLEDAudioProcessorEditor::recallLastChord()
+{
+    lastRecallWasChord = true;
+    processorRef.recallLastChord();
+}
+
+void PianoLEDAudioProcessorEditor::updateStatusLabel()
+{
+    if (processorRef.isStripTestRunning() && page == Page::play)
+    {
+        statusLabel.setText (utf8 (u8"\u0422\u0435\u0441\u0442: \u0431\u0435\u0433\u0443\u0449\u0438\u0439 \u0434\u0438\u043e\u0434 \u043f\u043e \u043b\u0435\u043d\u0442\u0435\u2026"),
+                             juce::dontSendNotification);
+        return;
+    }
+
+    if (processorRef.isHistoryPreview())
+    {
+        const auto recalled = processorRef.getDisplayNotes();
+        if (recalled.count() == 0)
+        {
+            statusLabel.setText (utf8 (u8"\u0418\u0441\u0442\u043e\u0440\u0438\u044f \u043f\u0443\u0441\u0442\u0430 \u2014 \u0441\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u044b\u0433\u0440\u0430\u0439"),
+                                 juce::dontSendNotification);
+            return;
+        }
+        const auto prefix = lastRecallWasChord
+                                ? utf8 (u8"\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u0430\u043a\u043a\u043e\u0440\u0434: ")
+                                : utf8 (u8"\u041f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 \u043d\u043e\u0442\u044b: ");
+        statusLabel.setText (prefix + juce::String (recalled.count()) + "  |  "
+                                 + chordTextFromSnapshot (recalled),
+                             juce::dontSendNotification);
+        return;
+    }
+
+    const auto snap = processorRef.getActiveNotes();
+    const int held = snap.count();
+    if (held == 0)
+        statusLabel.setText ("Waiting for MIDI...", juce::dontSendNotification);
+    else
+    {
+        const auto suffix = held == 1 ? " note" : " notes";
+        statusLabel.setText (juce::String (held) + suffix + "  |  " + chordTextFromSnapshot (snap),
+                             juce::dontSendNotification);
+    }
+}
+
+void PianoLEDAudioProcessorEditor::applyBrightness()
+{
+    processorRef.setLedBrightness (static_cast<float> (brightnessSlider.getValue()));
+}
+
+void PianoLEDAudioProcessorEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    if (ignoreColour || page != Page::settings)
+        return;
+
+    const auto colour = colourSelector.getCurrentColour();
+    float hue = 0.0f, sat = 0.0f, bri = 1.0f;
+    colour.getHSB (hue, sat, bri);
+    processorRef.setLedHueSat (hue * 360.0f, sat);
+
+    ignoreColour = true;
+    colourSelector.setCurrentColour (juce::Colour::fromHSV (hue, sat, 1.0f, 1.0f),
+                                     juce::dontSendNotification);
+    ignoreColour = false;
+}
+
+juce::Colour PianoLEDAudioProcessorEditor::accentColour() const
+{
+    const auto rgb = processorRef.ledStyle().toRgb();
+    return visibleLedColour (rgb.r, rgb.g, rgb.b);
 }
 
 void PianoLEDAudioProcessorEditor::applyFirstNote()
@@ -312,6 +585,10 @@ void PianoLEDAudioProcessorEditor::loadSelectedPreset()
     layoutTable.updateContent();
     layoutTable.selectRow (0);
     selectedRowsChanged (0);
+    if (page == Page::settings)
+        syncSettingsControls();
+    if (page == Page::specials)
+        syncSpecialsControls();
 }
 
 void PianoLEDAudioProcessorEditor::savePreset()
@@ -325,7 +602,8 @@ void PianoLEDAudioProcessorEditor::savePreset()
     savedStatusLabel.setText (utf8 (u8"\u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u043e: ") + name
                                   + utf8 (u8" \u2014 \u0441\u043c\u043e\u0442\u0440\u0438 \u043b\u0435\u043d\u0442\u0443"),
                               juce::dontSendNotification);
-    startVerifyPlayback();
+    if (page == Page::layout)
+        startVerifyPlayback();
 }
 
 void PianoLEDAudioProcessorEditor::startVerifyPlayback()
@@ -447,7 +725,7 @@ void PianoLEDAudioProcessorEditor::drawStrip (juce::Graphics& g)
         const auto b = frame[static_cast<std::size_t> (led) * 3u + 2u];
         const bool on = r != 0 || gg != 0 || b != 0;
 
-        g.setColour (on ? juce::Colour (0xffe05050) : juce::Colour (0xff1a1e28));
+        g.setColour (on ? visibleLedColour (r, gg, b) : juce::Colour (0xff1a1e28));
         g.fillRect (static_cast<float> (stripBounds.getX()) + static_cast<float> (led) * ledWidth,
                     static_cast<float> (stripBounds.getY()),
                     std::max (1.0f, ledWidth - 0.4f),
@@ -458,7 +736,7 @@ void PianoLEDAudioProcessorEditor::drawStrip (juce::Graphics& g)
 void PianoLEDAudioProcessorEditor::drawKeyboard (juce::Graphics& g)
 {
     const auto layout = processorRef.ledLayout();
-    const auto notes = processorRef.getActiveNotes();
+    const auto notes = processorRef.getDisplayNotes();
     if (! layout.isValid() || keyboardBounds.isEmpty())
         return;
 
@@ -469,6 +747,7 @@ void PianoLEDAudioProcessorEditor::drawKeyboard (juce::Graphics& g)
 
     const int preview = verifying ? verifyKey : layoutTable.getSelectedRow();
     const bool blinkOn = verifying || ((juce::Time::currentTimeMillis() / 500) % 2) == 0;
+    const auto accent = accentColour();
 
     const float keyWidth = static_cast<float> (keyboardBounds.getWidth()) / static_cast<float> (keys);
 
@@ -476,13 +755,14 @@ void PianoLEDAudioProcessorEditor::drawKeyboard (juce::Graphics& g)
     {
         const int note = lowest + i;
         const bool midiOn = notes.isOn (note);
-        const bool editBlink = layoutMode && i == preview && blinkOn;
-        const bool on = midiOn || editBlink;
+        const bool editBlink = page == Page::layout && i == preview && blinkOn;
+        const bool settingsFill = page == Page::settings;
+        const bool on = midiOn || editBlink || settingsFill;
         const bool black = isBlackKey (note);
         const auto x = static_cast<float> (keyboardBounds.getX()) + static_cast<float> (i) * keyWidth;
 
         if (on)
-            g.setColour (juce::Colour (0xffe05050));
+            g.setColour (accent);
         else if (black)
             g.setColour (juce::Colour (0xff161820));
         else
@@ -501,19 +781,21 @@ void PianoLEDAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds().reduced (20);
     auto titleRow = bounds.removeFromTop (32);
-    if (layoutMode)
+    if (page != Page::play)
         backButton.setBounds (titleRow.removeFromLeft (80));
     else
     {
         layoutButton.setBounds (titleRow.removeFromRight (110));
         titleRow.removeFromRight (6);
         testButton.setBounds (titleRow.removeFromRight (72));
+        titleRow.removeFromRight (6);
+        settingsButton.setBounds (titleRow.removeFromRight (110));
     }
     titleLabel.setBounds (titleRow);
 
     bounds.removeFromTop (8);
 
-    if (! layoutMode)
+    if (page == Page::play)
     {
         statusLabel.setBounds (bounds.removeFromTop (48));
         bounds.removeFromTop (4);
@@ -526,9 +808,11 @@ void PianoLEDAudioProcessorEditor::resized()
             connectRow.removeFromLeft (8);
         }
         reconnectButton.setBounds (connectRow);
-        bounds.removeFromTop (20);
+        bounds.removeFromTop (16);
+        specialsButton.setBounds (bounds.removeFromTop (28).reduced (40, 0));
+        bounds.removeFromTop (12);
     }
-    else
+    else if (page == Page::layout)
     {
         auto row = bounds.removeFromTop (24);
         firstNoteLabel.setBounds (row.removeFromLeft (120));
@@ -557,6 +841,53 @@ void PianoLEDAudioProcessorEditor::resized()
         layoutTable.setBounds (bounds.removeFromTop (190));
         bounds.removeFromTop (18);
     }
+    else if (page == Page::settings)
+    {
+        auto brightRow = bounds.removeFromTop (26);
+        brightnessLabel.setBounds (brightRow.removeFromLeft (120));
+        brightnessSlider.setBounds (brightRow);
+
+        bounds.removeFromTop (6);
+        colourLabel.setBounds (bounds.removeFromTop (20));
+        colourSelector.setBounds (bounds.removeFromTop (230));
+
+        bounds.removeFromTop (8);
+        auto presetRow = bounds.removeFromTop (26);
+        presetBox.setBounds (presetRow.removeFromLeft (140));
+        presetRow.removeFromLeft (6);
+        presetNameEditor.setBounds (presetRow.removeFromLeft (160));
+        presetRow.removeFromLeft (6);
+        saveButton.setBounds (presetRow);
+
+        bounds.removeFromTop (4);
+        savedStatusLabel.setBounds (bounds.removeFromTop (22));
+        bounds.removeFromTop (10);
+    }
+    else if (page == Page::specials)
+    {
+        statusLabel.setBounds (bounds.removeFromTop (40));
+        bounds.removeFromTop (8);
+
+        auto historyRow = bounds.removeFromTop (24);
+        historySizeLabel.setBounds (historyRow.removeFromLeft (160));
+        historySizeSlider.setBounds (historyRow.removeFromLeft (120));
+
+        bounds.removeFromTop (8);
+        auto notesRow = bounds.removeFromTop (28);
+        recallCountLabel.setBounds (notesRow.removeFromLeft (28));
+        recallCountSlider.setBounds (notesRow.removeFromLeft (100));
+        notesRow.removeFromLeft (8);
+        recallButton.setBounds (notesRow);
+
+        bounds.removeFromTop (10);
+        auto windowRow = bounds.removeFromTop (26);
+        chordWindowLabel.setBounds (windowRow.removeFromLeft (160));
+        chordWindowSlider.setBounds (windowRow);
+
+        bounds.removeFromTop (6);
+        chordButton.setBounds (bounds.removeFromTop (28).reduced (40, 0));
+        bounds.removeFromTop (12);
+    }
 
     stripBounds = bounds.removeFromTop (18);
     bounds.removeFromTop (10);
@@ -573,26 +904,14 @@ void PianoLEDAudioProcessorEditor::timerCallback()
                            + noteNameFromNumber (layout.highestNote()),
                        juce::dontSendNotification);
 
-    if (layoutMode)
+    if (page == Page::layout)
         tickVerifyPlayback();
 
-    if (! layoutMode)
+    if (page == Page::play || page == Page::specials)
+        updateStatusLabel();
+
+    if (page == Page::play)
     {
-        const auto snap = processorRef.getActiveNotes();
-        const int held = snap.count();
-
-        if (processorRef.isStripTestRunning())
-            statusLabel.setText (utf8 (u8"\u0422\u0435\u0441\u0442: \u0431\u0435\u0433\u0443\u0449\u0438\u0439 \u0434\u0438\u043e\u0434 \u043f\u043e \u043b\u0435\u043d\u0442\u0435\u2026"),
-                                 juce::dontSendNotification);
-        else if (held == 0)
-            statusLabel.setText ("Waiting for MIDI...", juce::dontSendNotification);
-        else
-        {
-            const auto suffix = held == 1 ? " note" : " notes";
-            statusLabel.setText (juce::String (held) + suffix + "  |  " + chordTextFromSnapshot (snap),
-                                 juce::dontSendNotification);
-        }
-
         if (processorRef.isLedConnecting())
         {
             connectSpinner->setVisible (true);
@@ -609,7 +928,8 @@ void PianoLEDAudioProcessorEditor::timerCallback()
             reconnectButton.setEnabled (true);
             reconnectButton.setButtonText (utf8 (u8"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u043b\u0435\u043d\u0442\u0443"));
             connectionLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
-            connectionLabel.setText ("LED strip: " + processorRef.ledDevicePath() + "  |  1%",
+            connectionLabel.setText ("LED strip: " + processorRef.ledDevicePath() + "  |  "
+                                         + juce::String (processorRef.ledStyle().brightnessPercent, 1) + "%",
                                      juce::dontSendNotification);
         }
         else

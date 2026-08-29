@@ -28,6 +28,7 @@ const char* tickResultName(TickResult result) {
 LedBridge::LedBridge(StripLayout layout) : builder_(layout) {
     led_proto_decoder_init(&decoder_);
     outBuffer_.resize(builder_.frameSize() + LED_PROTO_OVERHEAD);
+    noteColor_ = style_.toRgb();
 }
 
 void LedBridge::setLayout(StripLayout layout) {
@@ -44,6 +45,26 @@ void LedBridge::setPreviewNote(int midiNote, bool lit) {
 void LedBridge::setChaseLed(int ledIndex, bool lit) {
     chaseLed_ = ledIndex;
     chaseLit_ = lit;
+}
+
+void LedBridge::setStyle(LedStyle style) {
+    style.brightnessPercent = std::clamp(style.brightnessPercent, 0.1f, 20.0f);
+    if (style.saturation < 0.0f) style.saturation = 0.0f;
+    if (style.saturation > 1.0f) style.saturation = 1.0f;
+    style_ = style;
+    noteColor_ = style_.toRgb();
+    everSent_ = false;  // сразу пересобрать кадр — в «Настройках» эффект виден сразу
+}
+
+void LedBridge::setFillPreview(bool on) {
+    fillPreview_ = on;
+    everSent_ = false;
+}
+
+void LedBridge::setHistoryPreview(NoteBitmask::Snapshot notes, bool on) {
+    historyNotes_ = notes;
+    historyPreview_ = on;
+    everSent_ = false;
 }
 
 bool LedBridge::open(const std::string& devicePath, std::string* error) {
@@ -191,16 +212,22 @@ TickResult LedBridge::tick(bool force) {
     /* Пока руки неподвижны, по проводу не идёт ничего. Это не оптимизация ради
      * оптимизации: пустой канал означает, что любая активность на нём — это
      * реально сыгранная нота, и отладка становится тривиальной.
-     * Предпросмотр раскладки и бегущий тест — исключения: кадр должен уходить. */
-    if (!force && everSent_ && current == lastSent_ && !previewActive && !chaseActive)
+     * Предпросмотр раскладки, бегущий тест и заливка настроек — исключения. */
+    if (!force && everSent_ && current == lastSent_ && !previewActive && !chaseActive
+        && !fillPreview_ && !historyPreview_)
         return TickResult::unchanged;
 
     if (chaseActive && chaseLit_) {
         builder_.clear();
-        builder_.lightLed(chaseLed_, kNoteColor);
+        builder_.lightLed(chaseLed_, noteColor_);
+    } else if (fillPreview_) {
+        builder_.clear();
+        builder_.lightCenter(10, noteColor_);
+    } else if (historyPreview_) {
+        builder_.build(historyNotes_, noteColor_);
     } else {
-        builder_.build(current, kNoteColor);
-        if (previewActive && previewLit_) builder_.lightNote(previewNote_, kNoteColor);
+        builder_.build(current, noteColor_);
+        if (previewActive && previewLit_) builder_.lightNote(previewNote_, noteColor_);
     }
 
     if (!port_.isOpen()) {

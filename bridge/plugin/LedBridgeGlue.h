@@ -50,6 +50,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "piano_led/bridge.h"
+#include "piano_led/note_history.h"
 
 #include <atomic>
 
@@ -105,6 +106,8 @@ public:
              * с note-on velocity 0: многие клавиатуры гасят ноту именно так, и
              * наивная проверка isNoteOn() оставила бы её гореть навсегда. */
             if (message.isNoteOn()) {
+                history_.push(message.getNoteNumber());
+                historyPreview_.store(false, std::memory_order_relaxed);
                 bridge_.noteOn(message.getNoteNumber());
             } else if (message.isNoteOff()) {
                 bridge_.noteOff(message.getNoteNumber());
@@ -144,6 +147,10 @@ public:
         stopTimer();
         chasing_ = false;
         chaseSentLed_ = -1;
+        fillPreview_ = false;
+        historyPreview_.store(false, std::memory_order_relaxed);
+        bridge_.setFillPreview(false);
+        bridge_.setHistoryPreview({}, false);
         if (bridge_.isOpen()) {
             bridge_.sendClear();
             bridge_.close();
@@ -166,19 +173,57 @@ public:
     /** Все сейчас звучащие ноты — для аккорда в UI. Safe с потока таймера. */
     NoteBitmask::Snapshot activeNotes() const { return bridge_.activeNotes(); }
 
-    /* Яркость не настраивается — она всегда 1%. Задана константой kNoteColor
-     * в mac/include/piano_led/config.h. */
+    /* Яркость и цвет задаются в «Настройках» и сразу уходят на ленту. */
 
     /** Геометрия установки: длина ленты, диодов на клавишу, нижняя нота. */
     void setLayout(StripLayout layout) { bridge_.setLayout(std::move(layout)); }
     const StripLayout& layout() const { return bridge_.layout(); }
 
+    void setLedStyle(LedStyle style) { bridge_.setStyle(std::move(style)); }
+    const LedStyle& ledStyle() const { return bridge_.style(); }
+
     /** Нота для мигания в «Раскладке». -1 выключает. */
     void setLayoutPreviewNote(int midiNote) { previewNote_ = midiNote; }
     void setLayoutPreviewHold(bool hold) { previewHold_ = hold; }
 
+    /** Заливка всей ленты текущим цветом — страница «Настройки». */
+    void setSettingsFillPreview(bool on) {
+        fillPreview_ = on;
+        if (on) historyPreview_.store(false, std::memory_order_relaxed);
+        bridge_.setFillPreview(on);
+    }
+
+    void setHistoryCapacity(int n) { history_.setCapacity(n); }
+    int historyCapacity() const { return history_.capacity(); }
+    int historySize() const { return history_.size(); }
+
+    /** Зажигает последние m note-on. Живой MIDI снимает превью. */
+    void recallLastNotes(int m) { recallSnapshot(history_.asSnapshot(m)); }
+
+    void recallLastChord(int windowMs) { recallSnapshot(history_.lastChordSnapshot(windowMs)); }
+
+    void recallSnapshot(NoteBitmask::Snapshot snap) {
+        chasing_ = false;
+        fillPreview_ = false;
+        bridge_.setFillPreview(false);
+        historyHeld_ = snap;
+        historyPreview_.store(true, std::memory_order_relaxed);
+        historySent_ = true;
+        bridge_.setHistoryPreview(historyHeld_, true);
+    }
+
+    void clearHistoryPreview() {
+        historyPreview_.store(false, std::memory_order_relaxed);
+        historySent_ = false;
+        bridge_.setHistoryPreview({}, false);
+    }
+
+    bool isHistoryPreview() const { return historyPreview_.load(std::memory_order_relaxed); }
+    NoteBitmask::Snapshot historyPreviewNotes() const { return historyHeld_; }
+
     /** Бегущий диод по всей ленте. Повторный вызов начинает сначала. */
     void startChase() {
+        historyPreview_.store(false, std::memory_order_relaxed);
         chasing_ = true;
         chaseStartMs_ = juce::Time::currentTimeMillis();
     }
@@ -229,6 +274,22 @@ private:
         } else if (chaseSentLed_ >= 0) {
             bridge_.setChaseLed(-1, false);
             chaseSentLed_ = -1;
+            force = true;
+        }
+
+        if (fillPreview_)
+            force = true;
+
+        const bool wantHistory = historyPreview_.load(std::memory_order_relaxed);
+        if (wantHistory) {
+            if (!historySent_) {
+                bridge_.setHistoryPreview(historyHeld_, true);
+                historySent_ = true;
+                force = true;
+            }
+        } else if (historySent_) {
+            bridge_.setHistoryPreview({}, false);
+            historySent_ = false;
             force = true;
         }
 
@@ -316,6 +377,11 @@ private:
     bool chasing_ = false;
     juce::int64 chaseStartMs_ = 0;
     int chaseSentLed_ = -1;
+    bool fillPreview_ = false;
+    NoteHistory history_;
+    std::atomic<bool> historyPreview_{false};
+    bool historySent_ = false;
+    NoteBitmask::Snapshot historyHeld_{};
 };
 
 }  // namespace piano_led

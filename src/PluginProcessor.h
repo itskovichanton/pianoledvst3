@@ -39,6 +39,12 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     piano_led::NoteBitmask::Snapshot getActiveNotes() const { return ledBridge.activeNotes(); }
+    piano_led::NoteBitmask::Snapshot getDisplayNotes() const
+    {
+        return ledBridge.isHistoryPreview() ? ledBridge.historyPreviewNotes()
+                                            : ledBridge.activeNotes();
+    }
+    bool isHistoryPreview() const { return ledBridge.isHistoryPreview(); }
     const piano_led::StripLayout& ledLayout() const { return ledBridge.layout(); }
     const std::vector<std::uint8_t>& lastLedFrame() const { return ledBridge.lastFrame(); }
 
@@ -51,13 +57,29 @@ public:
     void commitLayout (piano_led::StripLayout layout);
     void setLayoutPreviewNote (int midiNote) { ledBridge.setLayoutPreviewNote (midiNote); }
     void setLayoutPreviewHold (bool hold) { ledBridge.setLayoutPreviewHold (hold); }
+    void setSettingsFillPreview (bool on) { ledBridge.setSettingsFillPreview (on); }
     void startStripTest() { ledBridge.startChase(); }
     void stopStripTest() { ledBridge.stopChase(); }
     bool isStripTestRunning() const { return ledBridge.isChasing(); }
+    void recallLastNotes();
+    void recallLastChord();
+    void clearHistoryPreview() { ledBridge.clearHistoryPreview(); }
+    int historySize() const { return ledBridge.historySize(); }
+    int getHistoryCapacity() const { return historyCapacity; }
+    void setHistoryCapacity (int n);
+    int getRecallCount() const { return recallCount; }
+    void setRecallCount (int m);
+    int getChordWindowMs() const { return chordWindowMs; }
+    void setChordWindowMs (int ms);
     void setFirstNote (int midiNote);
     void setStartLed (int led);
     void setMappedKeyCount (int keys);
     void setKeySize (int keyIndex, int size);
+
+    const piano_led::LedStyle& ledStyle() const { return ledBridge.ledStyle(); }
+    void setLedStyle (piano_led::LedStyle style);
+    void setLedBrightness (float percent);
+    void setLedHueSat (float hue, float saturation);
 
     juce::String saveLayoutPreset (const juce::String& name);
     void refreshPresetCombo (juce::ComboBox& box) const;
@@ -71,11 +93,18 @@ private:
     {
         juce::String name;
         piano_led::StripLayout layout;
+        piano_led::LedStyle style;
+        int historyCapacity = 30;
+        int recallCount = 8;
+        int chordWindowMs = 50;
     };
 
     piano_led::PluginLedBridge ledBridge;
     std::vector<LayoutPreset> presets;
     int currentProgram = 0;
+    int historyCapacity = 30;
+    int recallCount = 8;
+    int chordWindowMs = 50;
 
     void ensureDefaultPreset();
     void applyPreset (int index);

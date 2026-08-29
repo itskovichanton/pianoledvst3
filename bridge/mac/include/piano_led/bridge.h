@@ -109,11 +109,20 @@ public:
     const StripLayout& layout() const { return builder_.layout(); }
     void setLayout(StripLayout layout);
 
+    const LedStyle& style() const { return style_; }
+    void setStyle(LedStyle style);
+
     /** Нота, которую «Раскладка» мигает на ленте. -1 — выключено. */
     void setPreviewNote(int midiNote, bool lit);
 
     /** Один диод для теста «бегущий огонь». -1 — выключено. */
     void setChaseLed(int ledIndex, bool lit);
+
+    /** Заливка середины ленты текущим цветом — превью в «Настройках». */
+    void setFillPreview(bool on);
+
+    /** Пачка нот с кнопки «Последние ноты». Пустой snapshot выключает. */
+    void setHistoryPreview(NoteBitmask::Snapshot notes, bool on);
 
     /** Оценка тока последнего собранного кадра, мА. */
     double estimatedCurrentMa() const { return builder_.estimatedCurrentMa(); }
@@ -158,6 +167,14 @@ private:
 
     int chaseLed_ = -1;
     bool chaseLit_ = false;
+
+    bool fillPreview_ = false;
+
+    bool historyPreview_ = false;
+    NoteBitmask::Snapshot historyNotes_{};
+
+    LedStyle style_{};
+    Rgb noteColor_ = kNoteColor;
 };
 
 }  // namespace piano_led
