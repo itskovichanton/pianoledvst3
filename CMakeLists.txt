@@ -65,6 +65,8 @@ target_sources(PianoLED
         src/PluginProcessor.h
         src/PluginEditor.cpp
         src/PluginEditor.h
+        src/MidiDevicePlayer.cpp
+        src/MidiDevicePlayer.h
 )
 
 target_include_directories(PianoLED
@@ -83,6 +85,8 @@ target_compile_definitions(PianoLED
 target_link_libraries(PianoLED
     PRIVATE
         juce::juce_audio_utils
+        juce::juce_audio_devices
+        juce::juce_gui_extra
         piano_led_bridge
     PUBLIC
         juce::juce_recommended_config_flags

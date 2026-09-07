@@ -17,7 +17,9 @@
 
 #include "piano_led/bridge.h"
 #include "piano_led/frame_builder.h"
+#include "piano_led/midi_thru.h"
 #include "piano_led/note_bitmask.h"
+#include "piano_led/note_history.h"
 #include "test_framework.h"
 
 /* ══════════════════ счётчик аллокаций ══════════════════
@@ -216,6 +218,18 @@ void test_bridge_note_calls_do_not_allocate() {
     check_eq(allocations, 0L, "вызовы моста из аудио-потока не аллоцируют");
 }
 
+void test_note_history_push_does_not_allocate() {
+    begin_test("АУДИО-ПОТОК — NoteHistory::push не аллоцирует");
+
+    NoteHistory history;
+    history.push(60);
+
+    const long allocations = countAllocations([&] {
+        for (int i = 0; i < 10000; ++i) history.push(36 + (i % 48));
+    });
+    check_eq(allocations, 0L, "история note-on не аллоцирует");
+}
+
 void test_frame_build_does_not_allocate() {
     begin_test("Поток таймера — сборка кадра не аллоцирует");
 
@@ -371,6 +385,76 @@ void test_frame_custom_geometry() {
     check_eq(litLeds(builder.frame()), std::string("2,3"), "вторая клавиша -> диоды 2,3");
 }
 
+void test_variable_key_sizes_shift_neighbors() {
+    begin_test("StripLayout — размер клавиши сдвигает следующие диоды");
+
+    StripLayout layout;
+    layout.makeSizesExplicit();
+    layout.startLed = 0;
+    layout.setKeySize(0, 3);
+    layout.setKeySize(1, 2);
+    layout.setKeySize(2, 3);
+
+    check_eq(layout.ledStartForKey(0), 0, "первая клавиша с диода 0");
+    check_eq(layout.ledStartForKey(1), 3, "вторая сразу после размера первой");
+    check_eq(layout.ledStartForKey(2), 5, "третья сдвинулась на 2, а не на 3");
+
+    layout.setKeySize(1, 4);
+    check_eq(layout.ledStartForKey(2), 7, "увеличение размера сдвинуло хвост");
+
+    FrameBuilder builder(layout);
+    NoteBitmask notes;
+    notes.noteOn(37);  // вторая клавиша, C#2
+    builder.build(notes.snapshot(), Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("3,4,5,6"), "вторая клавиша — 4 диода");
+}
+
+void test_start_led_and_key_count() {
+    begin_test("StripLayout — стартовый диод и число клавиш");
+
+    StripLayout layout;
+    layout.startLed = 10;
+    layout.setMappedKeyCount(12);
+    check_eq(layout.keyCount(), 12, "клавиш стало 12");
+    check_eq(layout.highestNote(), 47, "12 клавиш от C2 заканчиваются на B2");
+    check_eq(layout.ledStartForKey(0), 10, "первая клавиша начинается с диода 10");
+}
+
+void test_frame_single_led() {
+    begin_test("FrameBuilder — один диод для бегущего теста");
+
+    FrameBuilder builder(StripLayout{});
+    NoteBitmask notes;
+    builder.build(notes.snapshot(), Rgb(3, 0, 0));
+    builder.lightLed(0, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("0"), "первый диод ленты");
+
+    builder.clear();
+    builder.lightLed(143, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("143"), "последний диод ленты");
+
+    builder.lightLed(-1, Rgb(3, 0, 0));
+    builder.lightLed(144, Rgb(3, 0, 0));
+    check_eq(litLeds(builder.frame()), std::string("143"), "индекс вне ленты игнорируется");
+}
+
+void test_bridge_chase_overrides_notes() {
+    begin_test("LedBridge — бегущий диод перекрывает ноты");
+
+    LedBridge bridge(StripLayout{});
+    bridge.noteOn(60);
+    bridge.tick();
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"), "нота C4 зажглась");
+
+    bridge.setChaseLed(5, true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("5"), "на ленте только бегущий диод");
+
+    bridge.setChaseLed(-1, false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"), "после теста нота вернулась");
+}
+
 /* ══════════════════════ ток ══════════════════════ */
 
 void test_current_estimate() {
@@ -403,24 +487,148 @@ void test_current_estimate() {
 
 /* ══════════════════════ LedBridge без железа ══════════════════════ */
 
-void test_brightness_is_fixed_at_one_percent() {
-    begin_test("Яркость — всегда 1%, без вариантов");
+void test_led_style_default_is_two_percent_red() {
+    begin_test("Стиль по умолчанию — красный 2%");
 
-    /* 1% от 255 = 2.55, округлено к 3. */
-    check_eq(int(kNoteColor.r), 3, "красный канал равен 3/255 — это 1%");
-    check_eq(int(kNoteColor.g), 0, "зелёный канал нулевой");
-    check_eq(int(kNoteColor.b), 0, "синий канал нулевой");
+    const Rgb rgb = LedStyle{}.toRgb();
+    check_eq(int(rgb.r), 5, "красный канал 5/255 — это 2%");
+    check_eq(int(rgb.g), 0, "зелёный канал нулевой");
+    check_eq(int(rgb.b), 0, "синий канал нулевой");
+    check_eq(int(kNoteColor.r), 5, "kNoteColor совпадает с умолчанием");
 
-    /* Мост обязан использовать именно её, а не свою копию. Проверяем по кадру:
-     * это единственный наблюдаемый результат, раз сеттеров цвета больше нет. */
+    LedStyle green;
+    green.hue = 120.0f;
+    const Rgb g = green.toRgb();
+    check_eq(int(g.r), 0, "зелёный оттенок: красный гаснет");
+    check_eq(int(g.g), 5, "зелёный оттенок: зелёный канал 2%");
+    check_eq(int(g.b), 0, "зелёный оттенок: синий гаснет");
+
+    LedStyle white;
+    white.saturation = 0.0f;
+    white.brightnessPercent = 2;
+    const Rgb w = white.toRgb();
+    check_eq(int(w.r), 5, "белый: красный 2%");
+    check_eq(int(w.g), 5, "белый: зелёный 2%");
+    check_eq(int(w.b), 5, "белый: синий 2%");
+
+    LedStyle dim;
+    dim.brightnessPercent = 0.1f;
+    const Rgb d = dim.toRgb();
+    check_eq(int(d.r), 1, "0.1% — минимум диода, канал 1/255");
+    check_eq(int(d.g), 0, "тусклый красный без зелёного");
+    check_eq(int(d.b), 0, "тусклый красный без синего");
+}
+
+void test_bridge_uses_style_and_fill() {
+    begin_test("LedBridge — стиль и заливка настроек сразу в кадре");
+
+    LedBridge bridge(StripLayout{});
+    bridge.noteOn(60);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 5, "нота зажглась на 2%");
+
+    LedStyle blue;
+    blue.hue = 240.0f;
+    blue.brightnessPercent = 2;
+    bridge.setStyle(blue);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 0, "после смены цвета красный гаснет");
+    check_eq(int(bridge.lastFrame()[72 * 3 + 2]), 5, "синий канал 2%");
+
+    bridge.setFillPreview(true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("67,68,69,70,71,72,73,74,75,76"),
+             "превью — 10 диодов посередине, не вся лента");
+    check_eq(int(bridge.lastFrame()[0]), 0, "край ленты погашен");
+    check_eq(int(bridge.lastFrame()[67 * 3 + 2]), 5, "середина горит синим 2%");
+    check_eq(int(bridge.lastFrame()[(144 * 3 - 1)]), 0, "другой край тоже погашен");
+
+    bridge.setFillPreview(false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74"),
+             "после заливки снова горит только нота");
+}
+
+void test_note_history_window_and_recall() {
+    begin_test("История нот — окно N и последние M");
+
+    NoteHistory history;
+    history.setCapacity(4);
+    history.push(60);
+    history.push(64);
+    history.push(67);
+    history.push(71);
+    history.push(72);  // пятая; при N=4 нота 60 уже за окном
+
+    check_eq(history.size(), 4, "окно N=4, пятая нота вытеснила первую из вида");
+    const auto four = history.asSnapshot(4);
+    check(four.isOn(64) && four.isOn(67) && four.isOn(71) && four.isOn(72),
+          "последние 4 высоты на месте");
+    check(!four.isOn(60), "первая нота уже за окном N");
+
+    const auto two = history.asSnapshot(2);
+    check(two.isOn(71) && two.isOn(72), "M=2 — две последние");
+    check(!two.isOn(64) && !two.isOn(67), "более ранние не входят в M");
+}
+
+void test_note_history_last_chord_by_time() {
+    begin_test("История — последний аккорд по окну времени");
+
+    NoteHistory history;
+    history.pushAt(60, 1000);
+    history.pushAt(64, 1010);
+    history.pushAt(67, 1020);
+    history.pushAt(72, 2000);
+    history.pushAt(76, 2015);
+
+    const auto chord = history.lastChordSnapshot(50);
+    check(chord.isOn(72) && chord.isOn(76), "последний аккорд — две ноты рядом");
+    check(!chord.isOn(60) && !chord.isOn(64) && !chord.isOn(67),
+          "предыдущий аккорд не попал: пауза больше окна");
+
+    const auto wide = history.lastChordSnapshot(2000);
+    check(wide.isOn(60) && wide.isOn(76), "большое окно склеивает всё в один аккорд");
+
+    history.pushAt(48, 5000);
+    const auto single = history.lastChordSnapshot(40);
+    check(single.isOn(48) && single.count() == 1, "одиночная нота — аккорд из одной");
+}
+
+void test_bridge_history_preview_lights_notes() {
+    begin_test("LedBridge — превью последних нот зажигает пачку");
+
+    LedBridge bridge(StripLayout{});
+    NoteBitmask::Snapshot chord;
+    chord.setOn(60);
+    chord.setOn(64);
+    chord.setOn(67);
+    bridge.setHistoryPreview(chord, true);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string("72,73,74,84,85,86,93,94,95"),
+             "C-E-G зажглись как при игре аккорда");
+
+    bridge.setHistoryPreview({}, false);
+    bridge.tick(true);
+    check_eq(litLeds(bridge.lastFrame()), std::string(""), "после превью лента погасла");
+}
+
+void test_brightness_is_user_controlled() {
+    begin_test("Яркость задаётся стилем, по умолчанию 2%");
+
     LedBridge bridge(StripLayout{});
     bridge.noteOn(60);
     bridge.tick();
 
     const std::vector<std::uint8_t>& frame = bridge.lastFrame();
-    check_eq(int(frame[72 * 3 + 0]), 3, "мост зажёг светодиод на 3/255");
+    check_eq(int(frame[72 * 3 + 0]), 5, "мост зажёг светодиод на 5/255");
     check_eq(int(frame[72 * 3 + 1]), 0, "зелёный не зажёгся");
     check_eq(int(frame[72 * 3 + 2]), 0, "синий не зажёгся");
+
+    LedStyle brighter;
+    brighter.brightnessPercent = 10;
+    bridge.setStyle(brighter);
+    bridge.tick();
+    check_eq(int(bridge.lastFrame()[72 * 3 + 0]), 26, "10% — пик канала 26");
 }
 
 void test_brightness_stays_within_budget() {
@@ -432,7 +640,7 @@ void test_brightness_stays_within_budget() {
     builder.build(notes.snapshot(), kNoteColor);
 
     const double current = builder.estimatedCurrentMa();
-    check(current < 150.0, "вся лента на 1% берёт " +
+    check(current < 150.0, "вся лента на 2% берёт " +
                                std::to_string(static_cast<int>(current)) +
                                " мА — в пределах бюджета 150 мА");
 }
@@ -472,6 +680,98 @@ void test_bridge_change_detection() {
              "force заставляет отправить кадр без изменений (keepalive)");
 }
 
+void test_midi_thru_notes_and_channel()
+{
+    begin_test("MIDI thru — ноты и канал");
+
+    MidiThruConfig cfg;
+    cfg.channel = 1;
+    MidiPacket out;
+
+    check(filterMidi(cfg, 0x90, 60, 100, out), "note-on проходит");
+    check_eq(static_cast<int>(out.size), 3, "note-on — 3 байта");
+    check_eq(static_cast<int>(out.bytes[0]), 0x90, "канал принудительно 1");
+    check_eq(static_cast<int>(out.bytes[1]), 60, "номер ноты");
+    check_eq(static_cast<int>(out.bytes[2]), 100, "velocity");
+
+    check(filterMidi(cfg, 0x95, 64, 80, out), "note-on с другого канала");
+    check_eq(static_cast<int>(out.bytes[0]), 0x90, "переписан на канал 1");
+
+    cfg.channel = 0;
+    check(filterMidi(cfg, 0x95, 64, 80, out), "Omni сохраняет канал");
+    check_eq(static_cast<int>(out.bytes[0]), 0x95, "канал 6 как был");
+
+    check(filterMidi(cfg, 0x80, 64, 0, out), "note-off проходит");
+    check(filterMidi(cfg, 0x90, 64, 0, out), "note-on velocity 0 проходит");
+}
+
+void test_midi_thru_mapped_keys_and_cc()
+{
+    begin_test("MIDI thru — раскладка и CC");
+
+    MidiThruConfig cfg;
+    cfg.channel = 1;
+    cfg.mappedKeysOnly = true;
+    cfg.lowestNote = 36;
+    cfg.highestNote = 83;
+    MidiPacket out;
+
+    check(filterMidi(cfg, 0x90, 36, 90, out), "первая нота раскладки проходит");
+    check(filterMidi(cfg, 0x90, 83, 90, out), "последняя нота раскладки проходит");
+    check(!filterMidi(cfg, 0x90, 35, 90, out), "ниже раскладки — отброшена");
+    check(!filterMidi(cfg, 0x90, 84, 90, out), "выше раскладки — отброшена");
+
+    cfg.mappedKeysOnly = false;
+    check(filterMidi(cfg, 0x90, 21, 90, out), "без фильтра весь диапазон");
+
+    check(filterMidi(cfg, 0xB0, 64, 127, out), "sustain по умолчанию");
+    check(!filterMidi(cfg, 0xB0, 1, 64, out), "modulation по умолчанию выкл");
+    check(!filterMidi(cfg, 0xB0, 7, 100, out), "volume не шлём");
+    check(filterMidi(cfg, 0xB0, 123, 0, out), "All Notes Off всегда");
+    check(filterMidi(cfg, 0xB0, 120, 0, out), "All Sound Off всегда");
+
+    cfg.sendSustain = false;
+    check(!filterMidi(cfg, 0xB0, 64, 0, out), "sustain можно выключить");
+
+    cfg.sendModulation = true;
+    check(filterMidi(cfg, 0xB0, 1, 40, out), "modulation по флагу");
+}
+
+void test_midi_thru_pitch_pc_clock_panic()
+{
+    begin_test("MIDI thru — pitch, PC, clock, panic");
+
+    MidiThruConfig cfg;
+    MidiPacket out;
+
+    check(!filterMidi(cfg, 0xE0, 0, 64, out), "pitch bend по умолчанию выкл");
+    cfg.sendPitchBend = true;
+    check(filterMidi(cfg, 0xE5, 0, 64, out), "pitch bend по флагу");
+    check_eq(static_cast<int>(out.bytes[0]), 0xE0, "pitch на канал 1");
+
+    check(!filterMidi(cfg, 0xC0, 12, 0, out), "program change по умолчанию выкл");
+    cfg.sendProgramChange = true;
+    cfg.channel = 3;
+    check(filterMidi(cfg, 0xC0, 12, 0, out), "program change по флагу");
+    check_eq(static_cast<int>(out.size), 2, "PC — 2 байта");
+    check_eq(static_cast<int>(out.bytes[0]), 0xC2, "PC на канал 3");
+    check_eq(static_cast<int>(out.bytes[1]), 12, "номер программы");
+
+    check(!filterMidi(cfg, 0xF8, 0, 0, out), "clock отброшен");
+    check(!filterMidi(cfg, 0xF0, 0, 0, out), "SysEx отброшен");
+    check(!filterMidi(cfg, 0xA0, 60, 40, out), "poly aftertouch отброшен");
+
+    MidiPacket panic[40];
+    const int n1 = panicPackets(1, panic, 40);
+    check_eq(n1, 2, "panic на один канал — 2 сообщения");
+    check_eq(static_cast<int>(panic[0].bytes[0]), 0xB0, "panic канал 1");
+    check_eq(static_cast<int>(panic[0].bytes[1]), 123, "All Notes Off");
+    check_eq(static_cast<int>(panic[1].bytes[1]), 120, "All Sound Off");
+
+    const int nAll = panicPackets(0, panic, 40);
+    check_eq(nAll, 32, "Omni panic — 16 каналов × 2");
+}
+
 }  // namespace
 
 int main() {
@@ -485,6 +785,7 @@ int main() {
     test_allocation_detector_works();
     test_realtime_path_does_not_allocate();
     test_bridge_note_calls_do_not_allocate();
+    test_note_history_push_does_not_allocate();
     test_frame_build_does_not_allocate();
 
     test_layout_math();
@@ -494,14 +795,27 @@ int main() {
     test_frame_reversed_strip();
     test_frame_clears_previous();
     test_frame_custom_geometry();
+    test_variable_key_sizes_shift_neighbors();
+    test_start_led_and_key_count();
+    test_frame_single_led();
+    test_bridge_chase_overrides_notes();
 
     test_current_estimate();
 
-    test_brightness_is_fixed_at_one_percent();
+    test_led_style_default_is_two_percent_red();
+    test_bridge_uses_style_and_fill();
+    test_note_history_window_and_recall();
+    test_note_history_last_chord_by_time();
+    test_bridge_history_preview_lights_notes();
+    test_brightness_is_user_controlled();
     test_brightness_stays_within_budget();
 
     test_bridge_without_port();
     test_bridge_change_detection();
+
+    test_midi_thru_notes_and_channel();
+    test_midi_thru_mapped_keys_and_cc();
+    test_midi_thru_pitch_pc_clock_panic();
 
     return finish();
 }

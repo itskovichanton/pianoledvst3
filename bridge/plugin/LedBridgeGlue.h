@@ -50,6 +50,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "piano_led/bridge.h"
+#include "piano_led/note_history.h"
+
+#include <atomic>
 
 namespace piano_led {
 
@@ -103,6 +106,8 @@ public:
              * с note-on velocity 0: многие клавиатуры гасят ноту именно так, и
              * наивная проверка isNoteOn() оставила бы её гореть навсегда. */
             if (message.isNoteOn()) {
+                history_.push(message.getNoteNumber());
+                historyPreview_.store(false, std::memory_order_relaxed);
                 bridge_.noteOn(message.getNoteNumber());
             } else if (message.isNoteOff()) {
                 bridge_.noteOff(message.getNoteNumber());
@@ -131,14 +136,21 @@ public:
         std::string error;
         const bool connected = bridge_.openAuto(&error, 3000);
         if (!connected) lastError_ = error;
-
         startTimerHz(kFramesPerSecond);
+        if (!connected)
+            nextReconnectMs_ = juce::Time::currentTimeMillis() + 1000;
         return connected;
     }
 
     /** Гасит ленту и останавливает отправку. */
     void stop() {
         stopTimer();
+        chasing_ = false;
+        chaseSentLed_ = -1;
+        fillPreview_ = false;
+        historyPreview_.store(false, std::memory_order_relaxed);
+        bridge_.setFillPreview(false);
+        bridge_.setHistoryPreview({}, false);
         if (bridge_.isOpen()) {
             bridge_.sendClear();
             bridge_.close();
@@ -147,15 +159,12 @@ public:
 
     /** Повторная попытка подключения — например по кнопке в редакторе. */
     bool reconnect() {
-        if (bridge_.isOpen()) return true;
-
-        const bool launched = launchHelperIfNeeded();
-        if (launched) juce::Thread::sleep(700);
-        std::string error;
-        const bool connected = bridge_.openAuto(&error, 3000);
-        if (!connected) lastError_ = error;
-        return connected;
+        pendingUserReconnect_ = true;
+        connecting_ = true;
+        return false;
     }
+
+    bool isConnecting() const { return connecting_.load(); }
 
     bool isConnected() const { return bridge_.isOpen(); }
     juce::String devicePath() const { return juce::String(bridge_.devicePath()); }
@@ -164,12 +173,64 @@ public:
     /** Все сейчас звучащие ноты — для аккорда в UI. Safe с потока таймера. */
     NoteBitmask::Snapshot activeNotes() const { return bridge_.activeNotes(); }
 
-    /* Яркость не настраивается — она всегда 1%. Задана константой kNoteColor
-     * в mac/include/piano_led/config.h. */
+    /* Яркость и цвет задаются в «Настройках» и сразу уходят на ленту. */
 
     /** Геометрия установки: длина ленты, диодов на клавишу, нижняя нота. */
-    void setLayout(StripLayout layout) { bridge_.setLayout(layout); }
+    void setLayout(StripLayout layout) { bridge_.setLayout(std::move(layout)); }
     const StripLayout& layout() const { return bridge_.layout(); }
+
+    void setLedStyle(LedStyle style) { bridge_.setStyle(std::move(style)); }
+    const LedStyle& ledStyle() const { return bridge_.style(); }
+
+    /** Нота для мигания в «Раскладке». -1 выключает. */
+    void setLayoutPreviewNote(int midiNote) { previewNote_ = midiNote; }
+    void setLayoutPreviewHold(bool hold) { previewHold_ = hold; }
+
+    /** Заливка всей ленты текущим цветом — страница «Настройки». */
+    void setSettingsFillPreview(bool on) {
+        fillPreview_ = on;
+        if (on) historyPreview_.store(false, std::memory_order_relaxed);
+        bridge_.setFillPreview(on);
+    }
+
+    void setHistoryCapacity(int n) { history_.setCapacity(n); }
+    int historyCapacity() const { return history_.capacity(); }
+    int historySize() const { return history_.size(); }
+
+    /** Зажигает последние m note-on. Живой MIDI снимает превью. */
+    void recallLastNotes(int m) { recallSnapshot(history_.asSnapshot(m)); }
+
+    void recallLastChord(int windowMs) { recallSnapshot(history_.lastChordSnapshot(windowMs)); }
+
+    void recallSnapshot(NoteBitmask::Snapshot snap) {
+        chasing_ = false;
+        fillPreview_ = false;
+        bridge_.setFillPreview(false);
+        historyHeld_ = snap;
+        historyPreview_.store(true, std::memory_order_relaxed);
+        historySent_ = true;
+        bridge_.setHistoryPreview(historyHeld_, true);
+    }
+
+    void clearHistoryPreview() {
+        historyPreview_.store(false, std::memory_order_relaxed);
+        historySent_ = false;
+        bridge_.setHistoryPreview({}, false);
+    }
+
+    bool isHistoryPreview() const { return historyPreview_.load(std::memory_order_relaxed); }
+    NoteBitmask::Snapshot historyPreviewNotes() const { return historyHeld_; }
+
+    /** Бегущий диод по всей ленте. Повторный вызов начинает сначала. */
+    void startChase() {
+        historyPreview_.store(false, std::memory_order_relaxed);
+        chasing_ = true;
+        chaseStartMs_ = juce::Time::currentTimeMillis();
+    }
+
+    void stopChase() { chasing_ = false; }
+
+    bool isChasing() const { return chasing_; }
 
     /** Последний собранный кадр — для предпросмотра ленты в редакторе плагина. */
     const std::vector<std::uint8_t>& lastFrame() const { return bridge_.lastFrame(); }
@@ -182,19 +243,100 @@ private:
         /* Кадр собираем всегда — UI рисует аккорд даже без порта.
          * Уходит на ленту только если порт открыт (см. LedBridge::tick). */
         const juce::int64 now = juce::Time::currentTimeMillis();
-        const bool keepalive = (now - lastSendMs_) >= kKeepaliveMs;
 
-        const TickResult result = bridge_.tick(keepalive);
+        if (pendingUserReconnect_.exchange(false)) {
+            connecting_ = true;
+            bridge_.close();
+            nextReconnectMs_ = 0;
+            reconnectInternal(false);
+            connecting_ = false;
+            return;
+        }
+
+        const bool keepalive = (now - lastSendMs_) >= kKeepaliveMs;
+        bool force = keepalive;
+
+        if (chasing_) {
+            const int leds = bridge_.layout().ledCount;
+            const int index = static_cast<int>((now - chaseStartMs_) / kChaseStepMs);
+            if (leds <= 0 || index >= leds) {
+                chasing_ = false;
+                if (chaseSentLed_ >= 0) {
+                    bridge_.setChaseLed(-1, false);
+                    chaseSentLed_ = -1;
+                    force = true;
+                }
+            } else {
+                if (index != chaseSentLed_) force = true;
+                chaseSentLed_ = index;
+                bridge_.setChaseLed(index, true);
+            }
+        } else if (chaseSentLed_ >= 0) {
+            bridge_.setChaseLed(-1, false);
+            chaseSentLed_ = -1;
+            force = true;
+        }
+
+        if (fillPreview_)
+            force = true;
+
+        const bool wantHistory = historyPreview_.load(std::memory_order_relaxed);
+        if (wantHistory) {
+            if (!historySent_) {
+                bridge_.setHistoryPreview(historyHeld_, true);
+                historySent_ = true;
+                force = true;
+            }
+        } else if (historySent_) {
+            bridge_.setHistoryPreview({}, false);
+            historySent_ = false;
+            force = true;
+        }
+
+        if (previewNote_ >= 0) {
+            const bool lit = previewHold_ || ((now / 500) % 2) == 0;
+            if (lit != previewLit_ || previewNote_ != previewSentNote_) force = true;
+            previewLit_ = lit;
+            previewSentNote_ = previewNote_;
+            bridge_.setPreviewNote(previewNote_, lit);
+        } else if (previewSentNote_ >= 0) {
+            bridge_.setPreviewNote(-1, false);
+            previewSentNote_ = -1;
+            previewLit_ = false;
+            force = true;
+        }
+
+        const TickResult result = bridge_.tick(force);
 
         if (result == TickResult::sent) {
             lastSendMs_ = now;
+            nextReconnectMs_ = 0;
         } else if (result == TickResult::writeFailed) {
-            /* Провод выдернули. Закрываем порт, чтобы следующий reconnect()
-             * начал с чистого листа, и молчим — плагин должен продолжать
-             * работать без ленты. */
+            /* Провод выдернули. Закрываем порт без SIGPIPE (SO_NOSIGPIPE),
+             * чтобы AU-хост GarageBand не умер, и позже переподключимся. */
             lastError_ = bridge_.lastError();
+            if (lastError_.empty()) lastError_ = "кабель отключили";
             bridge_.close();
+            nextReconnectMs_ = now + 400;
         }
+
+        if (!bridge_.isOpen() && nextReconnectMs_ > 0 && now >= nextReconnectMs_) {
+            nextReconnectMs_ = now + 1500;
+            reconnectInternal(true);
+        }
+    }
+
+    bool reconnectInternal(bool quick) {
+        if (bridge_.isOpen()) return true;
+
+        const bool launched = launchHelperIfNeeded();
+        if (launched) juce::Thread::sleep(quick ? 400 : 700);
+        std::string error;
+        const int probeMs = quick ? 1200 : 4000;
+        const int attempts = quick ? 1 : 8;
+        const bool connected = bridge_.openAuto(&error, probeMs, true, attempts);
+        if (!connected) lastError_ = error;
+        return connected;
     }
 
     bool launchHelperIfNeeded() {
@@ -219,9 +361,27 @@ private:
         return true;
     }
 
+    /** Шаг бегущего теста, мс. 144 диода × 50 мс ≈ 7 с на всю ленту. */
+    static constexpr int kChaseStepMs = 50;
+
     LedBridge bridge_;
     juce::int64 lastSendMs_ = 0;
+    juce::int64 nextReconnectMs_ = 0;
+    std::atomic<bool> connecting_ { false };
+    std::atomic<bool> pendingUserReconnect_ { false };
     std::string lastError_;
+    int previewNote_ = -1;
+    int previewSentNote_ = -1;
+    bool previewLit_ = false;
+    bool previewHold_ = false;
+    bool chasing_ = false;
+    juce::int64 chaseStartMs_ = 0;
+    int chaseSentLed_ = -1;
+    bool fillPreview_ = false;
+    NoteHistory history_;
+    std::atomic<bool> historyPreview_{false};
+    bool historySent_ = false;
+    NoteBitmask::Snapshot historyHeld_{};
 };
 
 }  // namespace piano_led

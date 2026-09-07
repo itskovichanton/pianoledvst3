@@ -42,6 +42,15 @@ public:
      */
     bool openTcp(const std::string& host, int port, std::string* error = nullptr);
 
+    /** Unix-сокет к helper. Из песочницы AU часто можно, а TCP — нет. */
+    bool openUnix(const std::string& path, std::string* error = nullptr);
+
+    /**
+     * Файловый канал в каталоге helper. Последний запасной путь, если сокеты
+     * тоже запрещены: плагин пишет кадры в файл, helper забирает их на USB.
+     */
+    bool openDropDir(const std::string& dir, std::string* error = nullptr);
+
     /**
      * Берёт под управление уже открытый дескриптор — так тесты подсовывают
      * псевдотерминал вместо железа. Порт становится владельцем fd.
@@ -65,7 +74,7 @@ public:
     static bool configureRaw(int fd, std::string* error = nullptr);
 
     void close();
-    bool isOpen() const { return fd_ >= 0; }
+    bool isOpen() const;
     const std::string& path() const { return path_; }
 
     /**
@@ -102,6 +111,7 @@ public:
 private:
     int fd_ = -1;
     std::string path_;
+    std::string dropDir_;
 };
 
 }  // namespace piano_led

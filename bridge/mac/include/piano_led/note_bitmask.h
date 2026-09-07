@@ -36,6 +36,14 @@ public:
 
         int count() const { return popcount(low) + popcount(high); }
 
+        void setOn(int note) {
+            if (note < 0 || note > 127) return;
+            if (note < 64)
+                low |= 1ull << note;
+            else
+                high |= 1ull << (note - 64);
+        }
+
         bool operator==(const Snapshot& other) const {
             return low == other.low && high == other.high;
         }

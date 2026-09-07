@@ -119,7 +119,8 @@ static void apply_pixel_frame(const uint8_t* payload, uint16_t length) {
         memset(s_pixels + usable, 0, sizeof(s_pixels) - usable);
     }
 
-    /* Сначала 1% на канал — иначе бюджет 150 мА всё равно оставит ленту яркой. */
+    /* Сначала потолок канала (20%) — иначе бюджет 150 мА всё равно оставит
+     * ленту яркой, если хост прислал 255. */
     led_guard_clamp_channels(s_pixels, sizeof(s_pixels), LED_GUARD_MAX_CHANNEL);
 
     if (led_guard_apply(s_pixels, sizeof(s_pixels), CURRENT_BUDGET_MA)) {

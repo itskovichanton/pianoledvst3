@@ -18,7 +18,7 @@
  *   --tempo-ms N       длительность ноты в гамме (по умолчанию 120)
  *   --hold-ms N        сколько держать аккорд/ноты (по умолчанию 3000)
  *
- * Яркость не настраивается: она всегда 1% (см. config.h).
+ * Яркость по умолчанию 2% (см. config.h и LedStyle).
  */
 
 #include <chrono>
@@ -61,7 +61,7 @@ void printHelp() {
   --tempo-ms N         длительность ноты в гамме, мс (по умолчанию 120)
   --hold-ms N          сколько держать ноты/аккорд, мс (по умолчанию 3000)
 
-Яркость всегда 1% и не настраивается.
+Яркость по умолчанию 2%; в плагине её можно менять в «Настройках».
 
 Примеры:
   ./run_ledctl.sh ping
@@ -183,7 +183,7 @@ int commandScale(const Options& options) {
     const int highest = layout.highestNote();
 
     std::cout << "Гамма: ноты " << lowest << ".." << highest << " (" << layout.keyCount()
-              << " клавиш), по " << options.tempoMs << " мс, яркость 1%\n\n";
+              << " клавиш), по " << options.tempoMs << " мс, яркость 2%\n\n";
 
     for (int note = lowest; note <= highest; ++note) {
         bridge.noteOn(note);
