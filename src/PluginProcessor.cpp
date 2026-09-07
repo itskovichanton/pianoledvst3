@@ -17,10 +17,12 @@ PianoLEDAudioProcessor::PianoLEDAudioProcessor()
     loadPresetsFromDisk();
     ensureDefaultPreset();
     ledBridge.setHistoryCapacity (historyCapacity);
+    applyMidiToPlayer();
 }
 
 PianoLEDAudioProcessor::~PianoLEDAudioProcessor()
 {
+    midiPlayer.panic();
     persistLayout();
 }
 
@@ -32,11 +34,13 @@ void PianoLEDAudioProcessor::prepareToPlay (double, int)
 
 void PianoLEDAudioProcessor::releaseResources()
 {
+    midiPlayer.panic();
 }
 
 void PianoLEDAudioProcessor::reset()
 {
     ledBridge.panic();
+    midiPlayer.panic();
 }
 
 bool PianoLEDAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -69,6 +73,7 @@ void PianoLEDAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         buffer.clear (channel, 0, buffer.getNumSamples());
 
     ledBridge.processMidi (midiMessages);
+    midiPlayer.processMidi (midiMessages);
 }
 
 juce::AudioProcessorEditor* PianoLEDAudioProcessor::createEditor()
@@ -80,6 +85,7 @@ void PianoLEDAudioProcessor::commitLayout (piano_led::StripLayout layout)
 {
     ledBridge.setLayout (std::move (layout));
     syncCurrentPreset();
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setFirstNote (int midiNote)
@@ -92,6 +98,7 @@ void PianoLEDAudioProcessor::setFirstNote (int midiNote)
         layout.setMappedKeyCount (128 - midiNote);
     ledBridge.setLayout (std::move (layout));
     syncCurrentPreset();
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setStartLed (int led)
@@ -100,6 +107,7 @@ void PianoLEDAudioProcessor::setStartLed (int led)
     layout.startLed = juce::jlimit (0, std::max (0, layout.ledCount - 1), led);
     ledBridge.setLayout (std::move (layout));
     syncCurrentPreset();
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setMappedKeyCount (int keys)
@@ -108,6 +116,7 @@ void PianoLEDAudioProcessor::setMappedKeyCount (int keys)
     layout.setMappedKeyCount (keys);
     ledBridge.setLayout (std::move (layout));
     syncCurrentPreset();
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setKeySize (int keyIndex, int size)
@@ -116,6 +125,7 @@ void PianoLEDAudioProcessor::setKeySize (int keyIndex, int size)
     layout.setKeySize (keyIndex, size);
     ledBridge.setLayout (std::move (layout));
     syncCurrentPreset();
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setLedStyle (piano_led::LedStyle style)
@@ -158,6 +168,73 @@ void PianoLEDAudioProcessor::setChordWindowMs (int ms)
 {
     chordWindowMs = juce::jlimit (5, 250, ms);
     syncCurrentPreset();
+}
+
+void PianoLEDAudioProcessor::pushMidiConfig()
+{
+    midiConfig.lowestNote = ledBridge.layout().lowestNote;
+    midiConfig.highestNote = ledBridge.layout().highestNote();
+    midiPlayer.setConfig (midiConfig);
+}
+
+void PianoLEDAudioProcessor::applyMidiToPlayer()
+{
+    pushMidiConfig();
+    midiPlayer.setDevice (midiDeviceId, midiDeviceName_);
+    midiPlayer.setEnabled (playOnDevice);
+}
+
+void PianoLEDAudioProcessor::setPlayOnDevice (bool on)
+{
+    playOnDevice = on;
+    applyMidiToPlayer();
+    persistLayout();
+}
+
+void PianoLEDAudioProcessor::setMidiDevice (const juce::String& identifier, const juce::String& name)
+{
+    midiDeviceId = identifier;
+    midiDeviceName_ = name;
+    midiPlayer.setDevice (midiDeviceId, midiDeviceName_);
+    if (playOnDevice)
+        midiPlayer.setEnabled (true);
+    persistLayout();
+}
+
+void PianoLEDAudioProcessor::setMidiChannel (int channel)
+{
+    midiConfig.channel = juce::jlimit (0, 16, channel);
+    pushMidiConfig();
+}
+
+void PianoLEDAudioProcessor::setMidiMappedKeysOnly (bool on)
+{
+    midiConfig.mappedKeysOnly = on;
+    pushMidiConfig();
+}
+
+void PianoLEDAudioProcessor::setMidiSendSustain (bool on)
+{
+    midiConfig.sendSustain = on;
+    pushMidiConfig();
+}
+
+void PianoLEDAudioProcessor::setMidiSendPitchBend (bool on)
+{
+    midiConfig.sendPitchBend = on;
+    pushMidiConfig();
+}
+
+void PianoLEDAudioProcessor::setMidiSendModulation (bool on)
+{
+    midiConfig.sendModulation = on;
+    pushMidiConfig();
+}
+
+void PianoLEDAudioProcessor::setMidiSendProgramChange (bool on)
+{
+    midiConfig.sendProgramChange = on;
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::recallLastNotes()
@@ -240,6 +317,34 @@ int readChordWindowXml (const juce::XmlElement& el)
 {
     return juce::jlimit (5, 250, el.getIntAttribute ("chordWindowMs", 50));
 }
+
+void writeMidiXml (juce::XmlElement& el, bool playOnDevice, const juce::String& deviceId,
+                   const juce::String& deviceName, const piano_led::MidiThruConfig& cfg)
+{
+    el.setAttribute ("playOnDevice", playOnDevice ? 1 : 0);
+    el.setAttribute ("midiDeviceId", deviceId);
+    el.setAttribute ("midiDeviceName", deviceName);
+    el.setAttribute ("midiChannel", cfg.channel);
+    el.setAttribute ("midiMappedKeysOnly", cfg.mappedKeysOnly ? 1 : 0);
+    el.setAttribute ("midiSustain", cfg.sendSustain ? 1 : 0);
+    el.setAttribute ("midiPitchBend", cfg.sendPitchBend ? 1 : 0);
+    el.setAttribute ("midiModulation", cfg.sendModulation ? 1 : 0);
+    el.setAttribute ("midiProgramChange", cfg.sendProgramChange ? 1 : 0);
+}
+
+void readMidiXml (const juce::XmlElement& el, bool& playOnDevice, juce::String& deviceId,
+                  juce::String& deviceName, piano_led::MidiThruConfig& cfg)
+{
+    playOnDevice = el.getIntAttribute ("playOnDevice", 0) != 0;
+    deviceId = el.getStringAttribute ("midiDeviceId");
+    deviceName = el.getStringAttribute ("midiDeviceName");
+    cfg.channel = juce::jlimit (0, 16, el.getIntAttribute ("midiChannel", 1));
+    cfg.mappedKeysOnly = el.getIntAttribute ("midiMappedKeysOnly", 0) != 0;
+    cfg.sendSustain = el.getIntAttribute ("midiSustain", 1) != 0;
+    cfg.sendPitchBend = el.getIntAttribute ("midiPitchBend", 0) != 0;
+    cfg.sendModulation = el.getIntAttribute ("midiModulation", 0) != 0;
+    cfg.sendProgramChange = el.getIntAttribute ("midiProgramChange", 0) != 0;
+}
 } // namespace
 
 void PianoLEDAudioProcessor::ensureDefaultPreset()
@@ -264,6 +369,7 @@ void PianoLEDAudioProcessor::applyPreset (int index)
     recallCount = juce::jlimit (1, historyCapacity, preset.recallCount);
     chordWindowMs = juce::jlimit (5, 250, preset.chordWindowMs);
     ledBridge.setHistoryCapacity (historyCapacity);
+    pushMidiConfig();
 }
 
 void PianoLEDAudioProcessor::setLayoutProgram (int index)
@@ -323,6 +429,7 @@ void PianoLEDAudioProcessor::savePresetsToDisk()
     xml.setAttribute ("current", currentProgram);
     writeLayoutXml (xml, ledBridge.layout(), ledBridge.ledStyle(), historyCapacity, recallCount,
                     chordWindowMs);
+    writeMidiXml (xml, playOnDevice, midiDeviceId, midiDeviceName_, midiConfig);
     for (const auto& preset : presets)
     {
         auto* child = xml.createNewChildElement ("Preset");
@@ -373,6 +480,8 @@ bool PianoLEDAudioProcessor::applyStateXml (const juce::XmlElement& xml)
     if (currentProgram < 0 || currentProgram >= static_cast<int> (presets.size()))
         currentProgram = 0;
     applyPreset (currentProgram);
+    readMidiXml (xml, playOnDevice, midiDeviceId, midiDeviceName_, midiConfig);
+    applyMidiToPlayer();
     return true;
 }
 
@@ -459,6 +568,7 @@ void PianoLEDAudioProcessor::getStateInformation (juce::MemoryBlock& destData)
     xml.setAttribute ("current", currentProgram);
     writeLayoutXml (xml, ledBridge.layout(), ledBridge.ledStyle(), historyCapacity, recallCount,
                     chordWindowMs);
+    writeMidiXml (xml, playOnDevice, midiDeviceId, midiDeviceName_, midiConfig);
     for (const auto& preset : presets)
     {
         auto* child = xml.createNewChildElement ("Preset");

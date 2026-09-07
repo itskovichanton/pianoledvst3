@@ -17,6 +17,7 @@
 
 #include "piano_led/bridge.h"
 #include "piano_led/frame_builder.h"
+#include "piano_led/midi_thru.h"
 #include "piano_led/note_bitmask.h"
 #include "piano_led/note_history.h"
 #include "test_framework.h"
@@ -679,6 +680,98 @@ void test_bridge_change_detection() {
              "force заставляет отправить кадр без изменений (keepalive)");
 }
 
+void test_midi_thru_notes_and_channel()
+{
+    begin_test("MIDI thru — ноты и канал");
+
+    MidiThruConfig cfg;
+    cfg.channel = 1;
+    MidiPacket out;
+
+    check(filterMidi(cfg, 0x90, 60, 100, out), "note-on проходит");
+    check_eq(static_cast<int>(out.size), 3, "note-on — 3 байта");
+    check_eq(static_cast<int>(out.bytes[0]), 0x90, "канал принудительно 1");
+    check_eq(static_cast<int>(out.bytes[1]), 60, "номер ноты");
+    check_eq(static_cast<int>(out.bytes[2]), 100, "velocity");
+
+    check(filterMidi(cfg, 0x95, 64, 80, out), "note-on с другого канала");
+    check_eq(static_cast<int>(out.bytes[0]), 0x90, "переписан на канал 1");
+
+    cfg.channel = 0;
+    check(filterMidi(cfg, 0x95, 64, 80, out), "Omni сохраняет канал");
+    check_eq(static_cast<int>(out.bytes[0]), 0x95, "канал 6 как был");
+
+    check(filterMidi(cfg, 0x80, 64, 0, out), "note-off проходит");
+    check(filterMidi(cfg, 0x90, 64, 0, out), "note-on velocity 0 проходит");
+}
+
+void test_midi_thru_mapped_keys_and_cc()
+{
+    begin_test("MIDI thru — раскладка и CC");
+
+    MidiThruConfig cfg;
+    cfg.channel = 1;
+    cfg.mappedKeysOnly = true;
+    cfg.lowestNote = 36;
+    cfg.highestNote = 83;
+    MidiPacket out;
+
+    check(filterMidi(cfg, 0x90, 36, 90, out), "первая нота раскладки проходит");
+    check(filterMidi(cfg, 0x90, 83, 90, out), "последняя нота раскладки проходит");
+    check(!filterMidi(cfg, 0x90, 35, 90, out), "ниже раскладки — отброшена");
+    check(!filterMidi(cfg, 0x90, 84, 90, out), "выше раскладки — отброшена");
+
+    cfg.mappedKeysOnly = false;
+    check(filterMidi(cfg, 0x90, 21, 90, out), "без фильтра весь диапазон");
+
+    check(filterMidi(cfg, 0xB0, 64, 127, out), "sustain по умолчанию");
+    check(!filterMidi(cfg, 0xB0, 1, 64, out), "modulation по умолчанию выкл");
+    check(!filterMidi(cfg, 0xB0, 7, 100, out), "volume не шлём");
+    check(filterMidi(cfg, 0xB0, 123, 0, out), "All Notes Off всегда");
+    check(filterMidi(cfg, 0xB0, 120, 0, out), "All Sound Off всегда");
+
+    cfg.sendSustain = false;
+    check(!filterMidi(cfg, 0xB0, 64, 0, out), "sustain можно выключить");
+
+    cfg.sendModulation = true;
+    check(filterMidi(cfg, 0xB0, 1, 40, out), "modulation по флагу");
+}
+
+void test_midi_thru_pitch_pc_clock_panic()
+{
+    begin_test("MIDI thru — pitch, PC, clock, panic");
+
+    MidiThruConfig cfg;
+    MidiPacket out;
+
+    check(!filterMidi(cfg, 0xE0, 0, 64, out), "pitch bend по умолчанию выкл");
+    cfg.sendPitchBend = true;
+    check(filterMidi(cfg, 0xE5, 0, 64, out), "pitch bend по флагу");
+    check_eq(static_cast<int>(out.bytes[0]), 0xE0, "pitch на канал 1");
+
+    check(!filterMidi(cfg, 0xC0, 12, 0, out), "program change по умолчанию выкл");
+    cfg.sendProgramChange = true;
+    cfg.channel = 3;
+    check(filterMidi(cfg, 0xC0, 12, 0, out), "program change по флагу");
+    check_eq(static_cast<int>(out.size), 2, "PC — 2 байта");
+    check_eq(static_cast<int>(out.bytes[0]), 0xC2, "PC на канал 3");
+    check_eq(static_cast<int>(out.bytes[1]), 12, "номер программы");
+
+    check(!filterMidi(cfg, 0xF8, 0, 0, out), "clock отброшен");
+    check(!filterMidi(cfg, 0xF0, 0, 0, out), "SysEx отброшен");
+    check(!filterMidi(cfg, 0xA0, 60, 40, out), "poly aftertouch отброшен");
+
+    MidiPacket panic[40];
+    const int n1 = panicPackets(1, panic, 40);
+    check_eq(n1, 2, "panic на один канал — 2 сообщения");
+    check_eq(static_cast<int>(panic[0].bytes[0]), 0xB0, "panic канал 1");
+    check_eq(static_cast<int>(panic[0].bytes[1]), 123, "All Notes Off");
+    check_eq(static_cast<int>(panic[1].bytes[1]), 120, "All Sound Off");
+
+    const int nAll = panicPackets(0, panic, 40);
+    check_eq(nAll, 32, "Omni panic — 16 каналов × 2");
+}
+
 }  // namespace
 
 int main() {
@@ -719,6 +812,10 @@ int main() {
 
     test_bridge_without_port();
     test_bridge_change_detection();
+
+    test_midi_thru_notes_and_channel();
+    test_midi_thru_mapped_keys_and_cc();
+    test_midi_thru_pitch_pc_clock_panic();
 
     return finish();
 }

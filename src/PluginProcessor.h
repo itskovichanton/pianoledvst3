@@ -1,6 +1,8 @@
 #pragma once
 
 #include "LedBridgeGlue.h"
+#include "MidiDevicePlayer.h"
+#include "piano_led/midi_thru.h"
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <vector>
@@ -88,6 +90,27 @@ public:
     void setLayoutProgram (int index);
     juce::String getLayoutProgramName() const;
 
+    bool isPlayOnDevice() const { return playOnDevice; }
+    void setPlayOnDevice (bool on);
+    juce::String midiDeviceIdentifier() const { return midiDeviceId; }
+    juce::String midiDeviceName() const { return midiDeviceName_; }
+    void setMidiDevice (const juce::String& identifier, const juce::String& name);
+    int getMidiChannel() const { return midiConfig.channel; }
+    void setMidiChannel (int channel);
+    bool midiMappedKeysOnly() const { return midiConfig.mappedKeysOnly; }
+    void setMidiMappedKeysOnly (bool on);
+    bool midiSendSustain() const { return midiConfig.sendSustain; }
+    void setMidiSendSustain (bool on);
+    bool midiSendPitchBend() const { return midiConfig.sendPitchBend; }
+    void setMidiSendPitchBend (bool on);
+    bool midiSendModulation() const { return midiConfig.sendModulation; }
+    void setMidiSendModulation (bool on);
+    bool midiSendProgramChange() const { return midiConfig.sendProgramChange; }
+    void setMidiSendProgramChange (bool on);
+    bool isMidiDeviceOpen() const { return midiPlayer.isOpen(); }
+    juce::String midiPlayStatusText() const { return midiPlayer.statusText(); }
+    void panicMidi() { midiPlayer.panic(); }
+
 private:
     struct LayoutPreset
     {
@@ -100,11 +123,16 @@ private:
     };
 
     piano_led::PluginLedBridge ledBridge;
+    MidiDevicePlayer midiPlayer;
     std::vector<LayoutPreset> presets;
     int currentProgram = 0;
     int historyCapacity = 30;
     int recallCount = 8;
     int chordWindowMs = 50;
+    bool playOnDevice = false;
+    juce::String midiDeviceId;
+    juce::String midiDeviceName_;
+    piano_led::MidiThruConfig midiConfig;
 
     void ensureDefaultPreset();
     void applyPreset (int index);
@@ -113,6 +141,8 @@ private:
     void loadPresetsFromDisk();
     bool applyStateXml (const juce::XmlElement&);
     void notifyHostState();
+    void pushMidiConfig();
+    void applyMidiToPlayer();
     static std::vector<juce::File> presetStoreFiles();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PianoLEDAudioProcessor)

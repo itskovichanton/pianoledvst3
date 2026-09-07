@@ -1,4 +1,5 @@
 #include "PluginEditor.h"
+#include "MidiDevicePlayer.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -106,7 +107,7 @@ public:
 PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
-    setSize (520, 400);
+    setSize (520, 460);
     setResizable (false, false);
 
     titleLabel.setText ("PianoLED", juce::dontSendNotification);
@@ -130,6 +131,10 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     specialsButton.setButtonText (utf8 (u8"\u0421\u043f\u0435\u0446\u0438\u0430\u043b\u044c\u043d\u044b\u0435 \u0444\u0443\u043d\u043a\u0446\u0438\u0438"));
     specialsButton.onClick = [this] { showPage (Page::specials); };
     addAndMakeVisible (specialsButton);
+
+    synthButton.setButtonText (utf8 (u8"\u0421\u0438\u043d\u0442\u0435\u0437\u0430\u0442\u043e\u0440"));
+    synthButton.onClick = [this] { showPage (Page::synth); };
+    addAndMakeVisible (synthButton);
 
     backButton.setButtonText (utf8 (u8"\u041d\u0430\u0437\u0430\u0434"));
     backButton.onClick = [this] { showPage (Page::play); };
@@ -294,6 +299,107 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     chordButton.setVisible (false);
     addAndMakeVisible (chordButton);
 
+    playOnDeviceButton.setButtonText (utf8 (u8"\u0418\u0433\u0440\u0430\u0442\u044c \u043d\u0430 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0435"));
+    playOnDeviceButton.setClickingTogglesState (true);
+    playOnDeviceButton.onClick = [this] {
+        processorRef.setPlayOnDevice (playOnDeviceButton.getToggleState());
+        updateMidiStatusLabel();
+    };
+    addAndMakeVisible (playOnDeviceButton);
+
+    midiStatusLabel.setFont (juce::FontOptions (12.0f));
+    midiStatusLabel.setJustificationType (juce::Justification::centredLeft);
+    midiStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    addAndMakeVisible (midiStatusLabel);
+
+    midiDeviceLabel.setText (utf8 (u8"\u0423\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u043e"), juce::dontSendNotification);
+    midiDeviceLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    midiDeviceLabel.setVisible (false);
+    addAndMakeVisible (midiDeviceLabel);
+
+    midiDeviceBox.onChange = [this] { applyMidiDevice(); };
+    midiDeviceBox.setVisible (false);
+    addAndMakeVisible (midiDeviceBox);
+
+    midiRefreshButton.setButtonText (utf8 (u8"\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c"));
+    midiRefreshButton.onClick = [this] { refreshMidiDeviceBox(); };
+    midiRefreshButton.setVisible (false);
+    addAndMakeVisible (midiRefreshButton);
+
+    midiChannelLabel.setText (utf8 (u8"\u041a\u0430\u043d\u0430\u043b"), juce::dontSendNotification);
+    midiChannelLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    midiChannelLabel.setVisible (false);
+    addAndMakeVisible (midiChannelLabel);
+
+    midiChannelBox.addItem ("Omni", 1);
+    for (int ch = 1; ch <= 16; ++ch)
+        midiChannelBox.addItem (juce::String (ch), ch + 1);
+    midiChannelBox.onChange = [this] { applyMidiChannel(); };
+    midiChannelBox.setVisible (false);
+    addAndMakeVisible (midiChannelBox);
+
+    midiPanicButton.setButtonText ("Panic");
+    midiPanicButton.onClick = [this] { processorRef.panicMidi(); };
+    midiPanicButton.setVisible (false);
+    addAndMakeVisible (midiPanicButton);
+
+    midiMappedKeysButton.setButtonText (utf8 (u8"\u0422\u043e\u043b\u044c\u043a\u043e \u043a\u043b\u0430\u0432\u0438\u0448\u0438 \u0440\u0430\u0441\u043a\u043b\u0430\u0434\u043a\u0438"));
+    midiMappedKeysButton.setClickingTogglesState (true);
+    midiMappedKeysButton.onClick = [this] {
+        processorRef.setMidiMappedKeysOnly (midiMappedKeysButton.getToggleState());
+    };
+    midiMappedKeysButton.setVisible (false);
+    addAndMakeVisible (midiMappedKeysButton);
+
+    midiExtraLabel.setText (utf8 (u8"\u0414\u043e\u043f\u043e\u043b\u043d\u0438\u0442\u0435\u043b\u044c\u043d\u043e \u0441\u043b\u0430\u0442\u044c"), juce::dontSendNotification);
+    midiExtraLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    midiExtraLabel.setVisible (false);
+    addAndMakeVisible (midiExtraLabel);
+
+    midiSustainButton.setButtonText (utf8 (u8"Sustain (CC64)"));
+    midiSustainButton.setClickingTogglesState (true);
+    midiSustainButton.onClick = [this] {
+        processorRef.setMidiSendSustain (midiSustainButton.getToggleState());
+    };
+    midiSustainButton.setVisible (false);
+    addAndMakeVisible (midiSustainButton);
+
+    midiPitchBendButton.setButtonText ("Pitch bend");
+    midiPitchBendButton.setClickingTogglesState (true);
+    midiPitchBendButton.onClick = [this] {
+        processorRef.setMidiSendPitchBend (midiPitchBendButton.getToggleState());
+    };
+    midiPitchBendButton.setVisible (false);
+    addAndMakeVisible (midiPitchBendButton);
+
+    midiModulationButton.setButtonText (utf8 (u8"Modulation (CC1)"));
+    midiModulationButton.setClickingTogglesState (true);
+    midiModulationButton.onClick = [this] {
+        processorRef.setMidiSendModulation (midiModulationButton.getToggleState());
+    };
+    midiModulationButton.setVisible (false);
+    addAndMakeVisible (midiModulationButton);
+
+    midiProgramChangeButton.setButtonText ("Program change");
+    midiProgramChangeButton.setClickingTogglesState (true);
+    midiProgramChangeButton.onClick = [this] {
+        processorRef.setMidiSendProgramChange (midiProgramChangeButton.getToggleState());
+    };
+    midiProgramChangeButton.setVisible (false);
+    addAndMakeVisible (midiProgramChangeButton);
+
+    midiHintLabel.setFont (juce::FontOptions (12.0f));
+    midiHintLabel.setJustificationType (juce::Justification::centredLeft);
+    midiHintLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    midiHintLabel.setText (utf8 (u8"USB TO HOST \u043d\u0430 Casio. \u0417\u0432\u0443\u043a \u0438\u0434\u0451\u0442 \u0438\u0437 \u0441\u0438\u043d\u0442\u0435\u0437\u0430\u0442\u043e\u0440\u0430, \u043d\u0435 \u0438\u0437 GarageBand."),
+                           juce::dontSendNotification);
+    midiHintLabel.setVisible (false);
+    addAndMakeVisible (midiHintLabel);
+
+    for (auto* toggle : { &playOnDeviceButton, &midiMappedKeysButton, &midiSustainButton,
+                          &midiPitchBendButton, &midiModulationButton, &midiProgramChangeButton })
+        styleToggle (*toggle);
+
     hintLabel.setText ("3 LEDs per key  |  48 keys  |  C2-B5", juce::dontSendNotification);
     hintLabel.setFont (juce::FontOptions (13.0f));
     hintLabel.setJustificationType (juce::Justification::centred);
@@ -302,6 +408,8 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
 
     startTimerHz (30);
     syncSpecialsControls();
+    playOnDeviceButton.setToggleState (processorRef.isPlayOnDevice(), juce::dontSendNotification);
+    updateMidiStatusLabel();
 }
 
 PianoLEDAudioProcessorEditor::~PianoLEDAudioProcessorEditor()
@@ -332,6 +440,10 @@ void PianoLEDAudioProcessorEditor::leaveCurrentPage()
     {
         processorRef.persistLayout();
     }
+    else if (page == Page::synth)
+    {
+        processorRef.persistLayout();
+    }
 }
 
 void PianoLEDAudioProcessorEditor::showPage (Page next)
@@ -344,8 +456,10 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
     const bool layout = page == Page::layout;
     const bool settings = page == Page::settings;
     const bool specials = page == Page::specials;
+    const bool synth = page == Page::synth;
 
-    titleLabel.setText (specials ? utf8 (u8"\u0421\u043f\u0435\u0446. \u0444\u0443\u043d\u043a\u0446\u0438\u0438") : "PianoLED",
+    titleLabel.setText (specials ? utf8 (u8"\u0421\u043f\u0435\u0446. \u0444\u0443\u043d\u043a\u0446\u0438\u0438")
+                                 : (synth ? utf8 (u8"\u0421\u0438\u043d\u0442\u0435\u0437\u0430\u0442\u043e\u0440") : "PianoLED"),
                         juce::dontSendNotification);
 
     statusLabel.setVisible (play || specials);
@@ -357,6 +471,9 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
     layoutButton.setVisible (play);
     settingsButton.setVisible (play);
     specialsButton.setVisible (play);
+    synthButton.setVisible (play);
+    playOnDeviceButton.setVisible (play);
+    midiStatusLabel.setVisible (play);
     backButton.setVisible (! play);
 
     firstNoteLabel.setVisible (layout);
@@ -380,6 +497,20 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
     chordWindowLabel.setVisible (specials);
     chordWindowSlider.setVisible (specials);
     chordButton.setVisible (specials);
+
+    midiDeviceLabel.setVisible (synth);
+    midiDeviceBox.setVisible (synth);
+    midiRefreshButton.setVisible (synth);
+    midiChannelLabel.setVisible (synth);
+    midiChannelBox.setVisible (synth);
+    midiPanicButton.setVisible (synth);
+    midiMappedKeysButton.setVisible (synth);
+    midiExtraLabel.setVisible (synth);
+    midiSustainButton.setVisible (synth);
+    midiPitchBendButton.setVisible (synth);
+    midiModulationButton.setVisible (synth);
+    midiProgramChangeButton.setVisible (synth);
+    midiHintLabel.setVisible (synth);
 
     const bool editorPage = layout || settings;
     presetBox.setVisible (editorPage);
@@ -419,10 +550,18 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
         syncSpecialsControls();
         setSize (520, 500);
     }
+    else if (synth)
+    {
+        processorRef.stopStripTest();
+        syncSynthControls();
+        setSize (520, 540);
+    }
     else
     {
         verifying = false;
-        setSize (520, 400);
+        playOnDeviceButton.setToggleState (processorRef.isPlayOnDevice(), juce::dontSendNotification);
+        updateMidiStatusLabel();
+        setSize (520, 460);
     }
 
     resized();
@@ -457,6 +596,102 @@ void PianoLEDAudioProcessorEditor::syncSpecialsControls()
     recallCountSlider.setRange (1.0, static_cast<double> (n), 1.0);
     recallCountSlider.setValue (processorRef.getRecallCount(), juce::dontSendNotification);
     chordWindowSlider.setValue (processorRef.getChordWindowMs(), juce::dontSendNotification);
+}
+
+void PianoLEDAudioProcessorEditor::styleToggle (juce::ToggleButton& button)
+{
+    button.setColour (juce::ToggleButton::textColourId, juce::Colours::white);
+    button.setColour (juce::ToggleButton::tickColourId, juce::Colour (0xff7ee0a8));
+}
+
+void PianoLEDAudioProcessorEditor::refreshMidiDeviceBox()
+{
+    ignoreMidiDeviceBox = true;
+    midiDevices = MidiDevicePlayer::availableOutputs();
+    midiDeviceBox.clear (juce::dontSendNotification);
+    midiDeviceBox.addItem (utf8 (u8"(\u043d\u0435 \u0432\u044b\u0431\u0440\u0430\u043d\u043e)"), 1);
+
+    const auto currentId = processorRef.midiDeviceIdentifier();
+    int selected = 1;
+    for (int i = 0; i < midiDevices.size(); ++i)
+    {
+        midiDeviceBox.addItem (midiDevices.getReference (i).name, i + 2);
+        if (midiDevices.getReference (i).identifier == currentId)
+            selected = i + 2;
+    }
+
+    if (selected == 1 && currentId.isNotEmpty())
+    {
+        const auto label = processorRef.midiDeviceName().isNotEmpty()
+                               ? processorRef.midiDeviceName()
+                               : currentId;
+        midiDeviceBox.addItem (label, 1000);
+        selected = 1000;
+    }
+
+    midiDeviceBox.setSelectedId (selected, juce::dontSendNotification);
+    ignoreMidiDeviceBox = false;
+}
+
+void PianoLEDAudioProcessorEditor::syncSynthControls()
+{
+    refreshMidiDeviceBox();
+    midiChannelBox.setSelectedId (processorRef.getMidiChannel() + 1, juce::dontSendNotification);
+    midiMappedKeysButton.setToggleState (processorRef.midiMappedKeysOnly(), juce::dontSendNotification);
+    midiSustainButton.setToggleState (processorRef.midiSendSustain(), juce::dontSendNotification);
+    midiPitchBendButton.setToggleState (processorRef.midiSendPitchBend(), juce::dontSendNotification);
+    midiModulationButton.setToggleState (processorRef.midiSendModulation(), juce::dontSendNotification);
+    midiProgramChangeButton.setToggleState (processorRef.midiSendProgramChange(), juce::dontSendNotification);
+}
+
+void PianoLEDAudioProcessorEditor::applyMidiDevice()
+{
+    if (ignoreMidiDeviceBox)
+        return;
+
+    const int id = midiDeviceBox.getSelectedId();
+    if (id == 1000)
+        return;
+
+    if (id <= 1)
+    {
+        processorRef.setMidiDevice ({}, {});
+        updateMidiStatusLabel();
+        return;
+    }
+
+    const int index = id - 2;
+    if (! juce::isPositiveAndBelow (index, midiDevices.size()))
+        return;
+
+    const auto& info = midiDevices.getReference (index);
+    processorRef.setMidiDevice (info.identifier, info.name);
+    updateMidiStatusLabel();
+}
+
+void PianoLEDAudioProcessorEditor::applyMidiChannel()
+{
+    const int id = midiChannelBox.getSelectedId();
+    if (id <= 0)
+        return;
+    processorRef.setMidiChannel (id - 1);
+}
+
+void PianoLEDAudioProcessorEditor::updateMidiStatusLabel()
+{
+    const bool on = processorRef.isPlayOnDevice();
+    if (playOnDeviceButton.getToggleState() != on)
+        playOnDeviceButton.setToggleState (on, juce::dontSendNotification);
+
+    const auto text = processorRef.midiPlayStatusText();
+    midiStatusLabel.setText (text, juce::dontSendNotification);
+
+    if (! on)
+        midiStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    else if (processorRef.isMidiDeviceOpen())
+        midiStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
+    else
+        midiStatusLabel.setColour (juce::Label::textColourId, juce::Colour (0xffe08a7e));
 }
 
 void PianoLEDAudioProcessorEditor::applyHistoryCapacity()
@@ -808,8 +1043,15 @@ void PianoLEDAudioProcessorEditor::resized()
             connectRow.removeFromLeft (8);
         }
         reconnectButton.setBounds (connectRow);
-        bounds.removeFromTop (16);
-        specialsButton.setBounds (bounds.removeFromTop (28).reduced (40, 0));
+        bounds.removeFromTop (10);
+        playOnDeviceButton.setBounds (bounds.removeFromTop (24));
+        midiStatusLabel.setBounds (bounds.removeFromTop (20));
+        bounds.removeFromTop (10);
+        auto toolsRow = bounds.removeFromTop (28);
+        const int half = (toolsRow.getWidth() - 8) / 2;
+        specialsButton.setBounds (toolsRow.removeFromLeft (half));
+        toolsRow.removeFromLeft (8);
+        synthButton.setBounds (toolsRow);
         bounds.removeFromTop (12);
     }
     else if (page == Page::layout)
@@ -888,6 +1130,33 @@ void PianoLEDAudioProcessorEditor::resized()
         chordButton.setBounds (bounds.removeFromTop (28).reduced (40, 0));
         bounds.removeFromTop (12);
     }
+    else if (page == Page::synth)
+    {
+        auto deviceRow = bounds.removeFromTop (26);
+        midiDeviceLabel.setBounds (deviceRow.removeFromLeft (110));
+        midiRefreshButton.setBounds (deviceRow.removeFromRight (110));
+        deviceRow.removeFromRight (6);
+        midiDeviceBox.setBounds (deviceRow);
+
+        bounds.removeFromTop (8);
+        auto channelRow = bounds.removeFromTop (26);
+        midiChannelLabel.setBounds (channelRow.removeFromLeft (110));
+        midiChannelBox.setBounds (channelRow.removeFromLeft (90));
+        channelRow.removeFromLeft (12);
+        midiPanicButton.setBounds (channelRow.removeFromLeft (90));
+
+        bounds.removeFromTop (10);
+        midiMappedKeysButton.setBounds (bounds.removeFromTop (24));
+        bounds.removeFromTop (8);
+        midiExtraLabel.setBounds (bounds.removeFromTop (20));
+        midiSustainButton.setBounds (bounds.removeFromTop (24));
+        midiPitchBendButton.setBounds (bounds.removeFromTop (24));
+        midiModulationButton.setBounds (bounds.removeFromTop (24));
+        midiProgramChangeButton.setBounds (bounds.removeFromTop (24));
+        bounds.removeFromTop (8);
+        midiHintLabel.setBounds (bounds.removeFromTop (36));
+        bounds.removeFromTop (10);
+    }
 
     stripBounds = bounds.removeFromTop (18);
     bounds.removeFromTop (10);
@@ -909,6 +1178,9 @@ void PianoLEDAudioProcessorEditor::timerCallback()
 
     if (page == Page::play || page == Page::specials)
         updateStatusLabel();
+
+    if (page == Page::play || page == Page::synth)
+        updateMidiStatusLabel();
 
     if (page == Page::play)
     {

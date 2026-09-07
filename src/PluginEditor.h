@@ -20,7 +20,7 @@ public:
     void setKeySizeFromCell (int row, int size);
 
 private:
-    enum class Page { play, layout, settings, specials };
+    enum class Page { play, layout, settings, specials, synth };
 
     void timerCallback() override;
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
@@ -31,6 +31,10 @@ private:
     void syncLayoutControls();
     void syncSettingsControls();
     void syncSpecialsControls();
+    void syncSynthControls();
+    void refreshMidiDeviceBox();
+    void applyMidiDevice();
+    void applyMidiChannel();
     void applyFirstNote();
     void applyStartLed();
     void applyKeyCount();
@@ -46,6 +50,8 @@ private:
     void tickVerifyPlayback();
     juce::Colour accentColour() const;
     void updateStatusLabel();
+    void updateMidiStatusLabel();
+    void styleToggle (juce::ToggleButton& button);
 
     int getNumRows() override;
     void paintRowBackground (juce::Graphics&, int rowNumber, int width, int height,
@@ -66,8 +72,12 @@ private:
     juce::TextButton layoutButton;
     juce::TextButton settingsButton;
     juce::TextButton specialsButton;
+    juce::TextButton synthButton;
     juce::TextButton backButton;
     juce::Label hintLabel;
+
+    juce::ToggleButton playOnDeviceButton;
+    juce::Label midiStatusLabel;
 
     juce::Label firstNoteLabel;
     juce::ComboBox firstNoteBox;
@@ -98,12 +108,28 @@ private:
     juce::Slider chordWindowSlider;
     juce::TextButton chordButton;
 
+    juce::Label midiDeviceLabel;
+    juce::ComboBox midiDeviceBox;
+    juce::TextButton midiRefreshButton;
+    juce::Label midiChannelLabel;
+    juce::ComboBox midiChannelBox;
+    juce::TextButton midiPanicButton;
+    juce::ToggleButton midiMappedKeysButton;
+    juce::Label midiExtraLabel;
+    juce::ToggleButton midiSustainButton;
+    juce::ToggleButton midiPitchBendButton;
+    juce::ToggleButton midiModulationButton;
+    juce::ToggleButton midiProgramChangeButton;
+    juce::Label midiHintLabel;
+    juce::Array<juce::MidiDeviceInfo> midiDevices;
+
     juce::Rectangle<int> stripBounds;
     juce::Rectangle<int> keyboardBounds;
     Page page = Page::play;
     bool verifying = false;
     bool ignorePresetBox = false;
     bool ignoreColour = false;
+    bool ignoreMidiDeviceBox = false;
     bool lastRecallWasChord = false;
     juce::int64 verifyStartMs = 0;
     int verifyKey = -1;
