@@ -141,7 +141,7 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     backButton.setVisible (false);
     addAndMakeVisible (backButton);
 
-    statusLabel.setText ("Waiting for MIDI...", juce::dontSendNotification);
+    statusLabel.setText ({}, juce::dontSendNotification);
     statusLabel.setFont (juce::FontOptions (16.0f));
     statusLabel.setJustificationType (juce::Justification::centredTop);
     statusLabel.setColour (juce::Label::textColourId, juce::Colour (0xff7ee0a8));
@@ -299,6 +299,29 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     chordButton.setVisible (false);
     addAndMakeVisible (chordButton);
 
+    specialsPlayDeviceButton.setButtonText (utf8 (u8"\u0418\u0433\u0440\u0430\u0442\u044c \u043d\u0430 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0435"));
+    specialsPlayDeviceButton.setClickingTogglesState (true);
+    specialsPlayDeviceButton.onClick = [this] {
+        if (specialsPlayDeviceButton.getToggleState())
+            playHighlightedOnDevice();
+        else
+            processorRef.stopChordOnDevice();
+    };
+    specialsPlayDeviceButton.setVisible (false);
+    addAndMakeVisible (specialsPlayDeviceButton);
+
+    specialsPlaySecondsSlider.setSliderStyle (juce::Slider::IncDecButtons);
+    specialsPlaySecondsSlider.setTextBoxStyle (juce::Slider::TextBoxLeft, false, 44, 18);
+    specialsPlaySecondsSlider.setRange (1.0, 120.0, 1.0);
+    specialsPlaySecondsSlider.onValueChange = [this] { applyRecallPlaySeconds(); };
+    specialsPlaySecondsSlider.setVisible (false);
+    addAndMakeVisible (specialsPlaySecondsSlider);
+
+    specialsPlaySecondsLabel.setText (utf8 (u8"\u0441\u0435\u043a"), juce::dontSendNotification);
+    specialsPlaySecondsLabel.setColour (juce::Label::textColourId, juce::Colour (0xff9aa3b2));
+    specialsPlaySecondsLabel.setVisible (false);
+    addAndMakeVisible (specialsPlaySecondsLabel);
+
     playOnDeviceButton.setButtonText (utf8 (u8"\u0418\u0433\u0440\u0430\u0442\u044c \u043d\u0430 \u0443\u0441\u0442\u0440\u043e\u0439\u0441\u0442\u0432\u0435"));
     playOnDeviceButton.setClickingTogglesState (true);
     playOnDeviceButton.onClick = [this] {
@@ -396,8 +419,9 @@ PianoLEDAudioProcessorEditor::PianoLEDAudioProcessorEditor (PianoLEDAudioProcess
     midiHintLabel.setVisible (false);
     addAndMakeVisible (midiHintLabel);
 
-    for (auto* toggle : { &playOnDeviceButton, &midiMappedKeysButton, &midiSustainButton,
-                          &midiPitchBendButton, &midiModulationButton, &midiProgramChangeButton })
+    for (auto* toggle : { &playOnDeviceButton, &specialsPlayDeviceButton, &midiMappedKeysButton,
+                          &midiSustainButton, &midiPitchBendButton, &midiModulationButton,
+                          &midiProgramChangeButton })
         styleToggle (*toggle);
 
     hintLabel.setText ("3 LEDs per key  |  48 keys  |  C2-B5", juce::dontSendNotification);
@@ -497,6 +521,9 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
     chordWindowLabel.setVisible (specials);
     chordWindowSlider.setVisible (specials);
     chordButton.setVisible (specials);
+    specialsPlayDeviceButton.setVisible (specials);
+    specialsPlaySecondsSlider.setVisible (specials);
+    specialsPlaySecondsLabel.setVisible (specials);
 
     midiDeviceLabel.setVisible (synth);
     midiDeviceBox.setVisible (synth);
@@ -548,7 +575,7 @@ void PianoLEDAudioProcessorEditor::showPage (Page next)
     {
         processorRef.stopStripTest();
         syncSpecialsControls();
-        setSize (520, 500);
+        setSize (520, 540);
     }
     else if (synth)
     {
@@ -596,6 +623,7 @@ void PianoLEDAudioProcessorEditor::syncSpecialsControls()
     recallCountSlider.setRange (1.0, static_cast<double> (n), 1.0);
     recallCountSlider.setValue (processorRef.getRecallCount(), juce::dontSendNotification);
     chordWindowSlider.setValue (processorRef.getChordWindowMs(), juce::dontSendNotification);
+    specialsPlaySecondsSlider.setValue (processorRef.getRecallPlaySeconds(), juce::dontSendNotification);
 }
 
 void PianoLEDAudioProcessorEditor::styleToggle (juce::ToggleButton& button)
@@ -714,12 +742,31 @@ void PianoLEDAudioProcessorEditor::recallLastNotes()
 {
     lastRecallWasChord = false;
     processorRef.recallLastNotes();
+    if (specialsPlayDeviceButton.getToggleState())
+        playHighlightedOnDevice();
 }
 
 void PianoLEDAudioProcessorEditor::recallLastChord()
 {
     lastRecallWasChord = true;
     processorRef.recallLastChord();
+    if (specialsPlayDeviceButton.getToggleState())
+        playHighlightedOnDevice();
+}
+
+void PianoLEDAudioProcessorEditor::playHighlightedOnDevice()
+{
+    auto snap = processorRef.getDisplayNotes();
+    if (snap.count() == 0)
+        snap = lastHeardNotes;
+    processorRef.playChordOnDevice (snap, processorRef.getRecallPlaySeconds());
+}
+
+void PianoLEDAudioProcessorEditor::applyRecallPlaySeconds()
+{
+    processorRef.setRecallPlaySeconds (static_cast<int> (specialsPlaySecondsSlider.getValue()));
+    if (specialsPlayDeviceButton.getToggleState())
+        playHighlightedOnDevice();
 }
 
 void PianoLEDAudioProcessorEditor::updateStatusLabel()
@@ -750,15 +797,17 @@ void PianoLEDAudioProcessorEditor::updateStatusLabel()
     }
 
     const auto snap = processorRef.getActiveNotes();
-    const int held = snap.count();
-    if (held == 0)
-        statusLabel.setText ("Waiting for MIDI...", juce::dontSendNotification);
-    else
-    {
-        const auto suffix = held == 1 ? " note" : " notes";
-        statusLabel.setText (juce::String (held) + suffix + "  |  " + chordTextFromSnapshot (snap),
-                             juce::dontSendNotification);
-    }
+    if (snap.count() > 0)
+        lastHeardNotes = snap;
+
+    const auto shown = snap.count() > 0 ? snap : lastHeardNotes;
+    if (shown.count() == 0)
+        return;
+
+    const auto suffix = shown.count() == 1 ? " note" : " notes";
+    statusLabel.setText (juce::String (shown.count()) + suffix + "  |  "
+                             + chordTextFromSnapshot (shown),
+                         juce::dontSendNotification);
 }
 
 void PianoLEDAudioProcessorEditor::applyBrightness()
@@ -1128,6 +1177,13 @@ void PianoLEDAudioProcessorEditor::resized()
 
         bounds.removeFromTop (6);
         chordButton.setBounds (bounds.removeFromTop (28).reduced (40, 0));
+        bounds.removeFromTop (10);
+        auto playRow = bounds.removeFromTop (26);
+        specialsPlayDeviceButton.setBounds (playRow.removeFromLeft (240));
+        playRow.removeFromLeft (8);
+        specialsPlaySecondsSlider.setBounds (playRow.removeFromLeft (100));
+        playRow.removeFromLeft (6);
+        specialsPlaySecondsLabel.setBounds (playRow);
         bounds.removeFromTop (12);
     }
     else if (page == Page::synth)
