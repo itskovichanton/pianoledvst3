@@ -1,6 +1,7 @@
 #pragma once
 
 #include "piano_led/midi_thru.h"
+#include "piano_led/note_bitmask.h"
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_audio_devices/juce_audio_devices.h>
@@ -29,6 +30,8 @@ public:
 
     void panic();
     void stop();
+    void playChord (const piano_led::NoteBitmask::Snapshot& notes, int durationMs);
+    void stopChord();
 
     bool isEnabled() const noexcept { return enabled_.load (std::memory_order_relaxed); }
     bool isOpen() const noexcept { return running_.load (std::memory_order_relaxed); }
@@ -56,6 +59,9 @@ private:
     piano_led::MidiThruConfig snapshotConfig() const noexcept;
     static std::uint32_t packFlags (const piano_led::MidiThruConfig& cfg) noexcept;
     bool deviceIsListed() const;
+    bool wantsPort() const noexcept;
+    void sendChordNotes (bool noteOn);
+    void closePortIfIdle();
 
     std::unique_ptr<juce::MidiOutput> output_;
     juce::String identifier_;
@@ -70,6 +76,9 @@ private:
     std::array<piano_led::MidiPacket, kFifoSize> packets_ {};
     juce::Array<juce::MidiDeviceInfo> listed_;
     juce::int64 nextRetryMs_ = 0;
+    piano_led::NoteBitmask::Snapshot chordNotes_;
+    bool chordActive_ = false;
+    juce::int64 chordOffMs_ = 0;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MidiDevicePlayer)
 };

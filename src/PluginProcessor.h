@@ -110,6 +110,10 @@ public:
     bool isMidiDeviceOpen() const { return midiPlayer.isOpen(); }
     juce::String midiPlayStatusText() const { return midiPlayer.statusText(); }
     void panicMidi() { midiPlayer.panic(); }
+    void playChordOnDevice (const piano_led::NoteBitmask::Snapshot& notes, int seconds);
+    void stopChordOnDevice();
+    int getRecallPlaySeconds() const { return recallPlaySeconds; }
+    void setRecallPlaySeconds (int seconds);
 
 private:
     struct LayoutPreset
@@ -133,6 +137,7 @@ private:
     juce::String midiDeviceId;
     juce::String midiDeviceName_;
     piano_led::MidiThruConfig midiConfig;
+    int recallPlaySeconds = 10;
 
     void ensureDefaultPreset();
     void applyPreset (int index);

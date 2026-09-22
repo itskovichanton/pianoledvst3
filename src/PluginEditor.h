@@ -52,6 +52,8 @@ private:
     void updateStatusLabel();
     void updateMidiStatusLabel();
     void styleToggle (juce::ToggleButton& button);
+    void playHighlightedOnDevice();
+    void applyRecallPlaySeconds();
 
     int getNumRows() override;
     void paintRowBackground (juce::Graphics&, int rowNumber, int width, int height,
@@ -107,6 +109,9 @@ private:
     juce::Label chordWindowLabel;
     juce::Slider chordWindowSlider;
     juce::TextButton chordButton;
+    juce::ToggleButton specialsPlayDeviceButton;
+    juce::Slider specialsPlaySecondsSlider;
+    juce::Label specialsPlaySecondsLabel;
 
     juce::Label midiDeviceLabel;
     juce::ComboBox midiDeviceBox;
@@ -131,6 +136,7 @@ private:
     bool ignoreColour = false;
     bool ignoreMidiDeviceBox = false;
     bool lastRecallWasChord = false;
+    piano_led::NoteBitmask::Snapshot lastHeardNotes;
     juce::int64 verifyStartMs = 0;
     int verifyKey = -1;
 

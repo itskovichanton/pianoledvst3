@@ -52,7 +52,7 @@ void MidiDevicePlayer::setEnabled (bool on)
         return;
     }
 
-    if (was || output_ != nullptr)
+    if (was && ! chordActive_)
     {
         sendPanicNow();
         closePort();
@@ -64,7 +64,7 @@ void MidiDevicePlayer::setDevice (const juce::String& identifier, const juce::St
     name_ = name;
     if (identifier_ == identifier)
     {
-        if (enabled_.load (std::memory_order_relaxed) && output_ == nullptr && identifier.isNotEmpty())
+        if (wantsPort() && output_ == nullptr && identifier.isNotEmpty())
             tryOpen();
         return;
     }
@@ -75,8 +75,12 @@ void MidiDevicePlayer::setDevice (const juce::String& identifier, const juce::St
     closePort();
     identifier_ = identifier;
 
-    if (enabled_.load (std::memory_order_relaxed))
+    if (enabled_.load (std::memory_order_relaxed) || chordActive_)
+    {
         tryOpen();
+        if (chordActive_ && output_ != nullptr)
+            sendChordNotes (true);
+    }
 }
 
 void MidiDevicePlayer::setConfig (const piano_led::MidiThruConfig& cfg)
@@ -97,10 +101,33 @@ void MidiDevicePlayer::panic()
     sendPanicNow();
 }
 
+void MidiDevicePlayer::playChord (const piano_led::NoteBitmask::Snapshot& notes, int durationMs)
+{
+    sendChordNotes (false);
+    chordNotes_ = notes;
+    chordActive_ = notes.count() > 0;
+    if (! chordActive_)
+        return;
+
+    chordOffMs_ = juce::Time::currentTimeMillis() + juce::jmax (1, durationMs);
+    tryOpen();
+    sendChordNotes (true);
+}
+
+void MidiDevicePlayer::stopChord()
+{
+    sendChordNotes (false);
+    chordNotes_ = {};
+    chordActive_ = false;
+    closePortIfIdle();
+}
+
 void MidiDevicePlayer::stop()
 {
     enabled_.store (false, std::memory_order_relaxed);
     stopTimer();
+    sendChordNotes (false);
+    chordActive_ = false;
     sendPanicNow();
     closePort();
 }
@@ -135,18 +162,25 @@ void MidiDevicePlayer::timerCallback()
     drainFifo();
 
     const auto now = juce::Time::currentTimeMillis();
+    if (chordActive_ && now >= chordOffMs_)
+        stopChord();
+
     if (now >= nextRetryMs_)
     {
         nextRetryMs_ = now + 2000;
         listed_ = juce::MidiOutput::getAvailableDevices();
-        if (enabled_.load (std::memory_order_relaxed) && output_ == nullptr && identifier_.isNotEmpty())
+        if (wantsPort() && output_ == nullptr && identifier_.isNotEmpty())
+        {
             tryOpen();
+            if (chordActive_ && output_ != nullptr)
+                sendChordNotes (true);
+        }
     }
 }
 
 void MidiDevicePlayer::tryOpen()
 {
-    if (! enabled_.load (std::memory_order_relaxed) || identifier_.isEmpty())
+    if (! wantsPort() || identifier_.isEmpty())
         return;
 
     if (output_ != nullptr)
@@ -164,6 +198,37 @@ void MidiDevicePlayer::closePort()
     running_.store (false, std::memory_order_relaxed);
     discardFifo();
     output_.reset();
+}
+
+void MidiDevicePlayer::closePortIfIdle()
+{
+    if (! enabled_.load (std::memory_order_relaxed) && ! chordActive_)
+        closePort();
+}
+
+void MidiDevicePlayer::sendChordNotes (bool noteOn)
+{
+    if (output_ == nullptr || chordNotes_.count() == 0)
+        return;
+
+    const int channel = channel_.load (std::memory_order_relaxed);
+    const auto midiCh = static_cast<std::uint8_t> (
+        (channel >= 1 && channel <= 16) ? channel - 1 : 0);
+    const auto velocity = static_cast<std::uint8_t> (noteOn ? 100 : 0);
+    const auto status = static_cast<std::uint8_t> (0x90 | midiCh);
+
+    for (int note = 0; note < 128; ++note)
+    {
+        if (! chordNotes_.isOn (note))
+            continue;
+        const std::uint8_t bytes[3] = { status, static_cast<std::uint8_t> (note), velocity };
+        output_->sendMessageNow (juce::MidiMessage (bytes, 3));
+    }
+}
+
+bool MidiDevicePlayer::wantsPort() const noexcept
+{
+    return enabled_.load (std::memory_order_relaxed) || chordActive_;
 }
 
 void MidiDevicePlayer::sendPanicNow()
